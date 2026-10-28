@@ -1,0 +1,19 @@
+node_modules
+.next
+out
+.env
+.env.local
+.env*.local
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+service-account.json
+*-service-account*.json
+cuenta-servicio*.json
+
+# Credenciales en la raíz: nunca subir (la cuenta de servicio vive aquí)
+/*.json
+!/package.json
+!/package-lock.json
+!/tsconfig.json
