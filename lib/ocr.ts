@@ -15,7 +15,7 @@ Analiza la imagen de la factura y devuelve UNICAMENTE un objeto JSON válido (si
       "fecha": "YYYY-MM-DD",
       "placa": "Placa del vehículo si es combustible",
       "concepto": "Descripción breve (ej. COMBUSTIBLE SÚPER, HOSPEDAJE)",
-      "tipoGasto": "Combustible", 
+      "tipoGasto": "Combustible",
       "valor": 125.00,
       "galones": 0,
       "tipoComb": "S",
@@ -30,59 +30,62 @@ Nota para tipoGasto: Clasifica estrictamente en Combustible, Viáticos, Hospedaj
 Nota para tipoComb: S (Súper), R (Regular), D (Diésel) o vacío si no es combustible.`;
 
 export function ocrEnabled(): boolean {
-  return Boolean(process.env.GROQ_API_KEY?.trim());
+  return Boolean(process.env.GEMINI_API_KEY?.trim());
 }
 
 export async function extractFromPhoto(
   base64: string,
   mimeType: string
 ): Promise<OcrDocument[]> {
-  const apiKey = process.env.GROQ_API_KEY?.trim();
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error("Falta configurar GROQ_API_KEY en Vercel.");
+    throw new Error("Falta configurar GEMINI_API_KEY en Vercel.");
   }
 
-  // Usamos estrictamente el modelo activo y estable de Groq Vision
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  // Usamos la API oficial y estable v1 de Google Gemini con el modelo 1.5-flash
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent`;
+
+  const response = await fetch(url, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
     },
     body: JSON.stringify({
-      model: "llama-3.2-90b-vision-instruct",
-      messages: [
+      contents: [
         {
           role: "user",
-          content: [
-            { type: "text", text: PROMPT },
+          parts: [
+            { text: PROMPT },
             {
-              type: "image_url",
-              image_url: {
-                url: `data:${mimeType};base64,${base64}`,
+              inline_data: {
+                mime_type: mimeType,
+                data: base64,
               },
             },
           ],
         },
       ],
-      temperature: 0.1,
-      response_format: { type: "json_object" },
+      generationConfig: {
+        temperature: 0.1,
+        response_mime_type: "application/json",
+      },
     }),
   });
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Error en el servicio de lectura Groq (${response.status}): ${errText.slice(0, 200)}`);
+    throw new Error(`Error en Google Gemini (${response.status}): ${errText.slice(0, 200)}`);
   }
 
   const data = await response.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) {
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
     throw new Error("La IA no devolvió resultados.");
   }
 
   try {
-    const parsed = JSON.parse(content);
+    const parsed = JSON.parse(text);
     const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
     return docs.map(normalizeOcrDocument);
   } catch {
