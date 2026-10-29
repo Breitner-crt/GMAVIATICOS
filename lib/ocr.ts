@@ -47,29 +47,28 @@ export function ocrEnabled(): boolean {
   return Boolean(process.env.GEMINI_API_KEY?.trim());
 }
 
-// Caché del nombre exacto del modelo soportado para responder siempre en < 2 segundos
-let cachedModelIdentifier: string | null = null;
+// Guardamos en memoria el endpoint exacto que responde OK para no repetir búsquedas
+let cachedWorkingUrl: string | null = null;
 
-async function resolveFastModel(apiKey: string): Promise<string> {
-  // 1. Si ya sabemos cuál funciona en la instancia, 0 ms
-  if (cachedModelIdentifier) {
-    return cachedModelIdentifier;
+async function getAvailableModelUrls(apiKey: string, preferredModel?: string): Promise<string[]> {
+  // 1. Si ya tenemos un endpoint verificado en caché, es el primer candidato
+  if (cachedWorkingUrl) {
+    return [cachedWorkingUrl];
   }
 
-  // 2. Si el usuario definió GEMINI_MODEL en variables de entorno
-  const envModel = process.env.GEMINI_MODEL?.trim();
-  if (envModel) {
-    cachedModelIdentifier = envModel.replace(/^models\//, "");
-    return cachedModelIdentifier;
+  const urls: string[] = [];
+
+  // 2. Si el usuario definió un modelo explícito
+  if (preferredModel) {
+    const clean = preferredModel.replace(/^models\//, "");
+    urls.push(`https://generativelanguage.googleapis.com/v1beta/models/${clean}:generateContent`);
   }
 
-  // 3. Consulta rápida GET a ListModels (sin payload, toma ~250ms)
+  // 3. Introspección directa con ListModels (el método que garantizó el éxito anteriormente)
   try {
     const listRes = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
       headers: { "x-goog-api-key": apiKey },
-      signal: AbortSignal.timeout(2500),
     });
-
     if (listRes.ok) {
       const data = await listRes.json();
       const models = Array.isArray(data.models) ? data.models : [];
@@ -78,25 +77,24 @@ async function resolveFastModel(apiKey: string): Promise<string> {
         m.supportedGenerationMethods.includes("generateContent")
       );
 
-      // Buscar el mejor modelo Flash activo
-      const flash = supported.find((m: any) => String(m.name).toLowerCase().includes("flash"));
-      if (flash?.name) {
-        cachedModelIdentifier = String(flash.name).replace(/^models\//, "");
-        return cachedModelIdentifier;
-      }
+      // Priorizar los modelos rápidos (flash primero, luego pro)
+      const flashModels = supported.filter((m: any) => String(m.name).toLowerCase().includes("flash"));
+      const otherModels = supported.filter((m: any) => !String(m.name).toLowerCase().includes("flash"));
 
-      if (supported[0]?.name) {
-        cachedModelIdentifier = String(supported[0].name).replace(/^models\//, "");
-        return cachedModelIdentifier;
+      for (const m of [...flashModels, ...otherModels]) {
+        urls.push(`https://generativelanguage.googleapis.com/v1beta/${m.name}:generateContent`);
       }
     }
   } catch {
-    /* si falla la introspección, usamos fallback */
+    // Si la llamada de introspección falla, usamos fallbacks
   }
 
-  // 4. Fallback directo si no se pudo listar
-  cachedModelIdentifier = "gemini-1.5-flash-latest";
-  return cachedModelIdentifier;
+  // Fallbacks universales
+  urls.push("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent");
+  urls.push("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent");
+  urls.push("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent");
+
+  return Array.from(new Set(urls));
 }
 
 export async function extractFromPhoto(
@@ -108,13 +106,12 @@ export async function extractFromPhoto(
     throw new Error("Falta configurar la variable GEMINI_API_KEY en Vercel.");
   }
 
-  let modelName = await resolveFastModel(apiKey);
-  let attempts = 0;
+  const preferredModel = process.env.GEMINI_MODEL?.trim();
+  const endpointUrls = await getAvailableModelUrls(apiKey, preferredModel);
 
-  while (attempts < 2) {
-    attempts++;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
+  let lastError: Error | null = null;
 
+  for (const url of endpointUrls) {
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -143,20 +140,18 @@ export async function extractFromPhoto(
             response_mime_type: "application/json",
           },
         }),
-        signal: AbortSignal.timeout(8500), // Máximo 8.5s para no llegar al timeout de Vercel
       });
 
       if (!response.ok) {
         const errText = await response.text();
-
-        // Si dio 404, cambiamos a gemini-1.5-flash-latest o gemini-2.0-flash y reintentamos una vez
-        if (response.status === 404 && attempts === 1) {
-          cachedModelIdentifier = null;
-          modelName = modelName.includes("1.5") ? "gemini-2.0-flash" : "gemini-1.5-flash-latest";
+        // Si el endpoint da 404, limpiamos la caché si era este y probamos con el siguiente
+        if (response.status === 404) {
+          if (cachedWorkingUrl === url) {
+            cachedWorkingUrl = null;
+          }
           continue;
         }
-
-        throw new Error(`Google Gemini (${response.status}): ${errText.slice(0, 150)}`);
+        throw new Error(`Google Gemini (${response.status}): ${errText.slice(0, 180)}`);
       }
 
       const data = await response.json();
@@ -165,7 +160,10 @@ export async function extractFromPhoto(
         throw new Error("La IA no devolvió resultados para esta imagen.");
       }
 
-      // Limpiar posibles delimitadores markdown
+      // Guardar el endpoint que funcionó para responder en < 2 segundos en las próximas llamadas
+      cachedWorkingUrl = url;
+
+      // Limpiar posibles delimitadores de código markdown por seguridad
       const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleaned);
       const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
@@ -176,16 +174,16 @@ export async function extractFromPhoto(
 
       return docs.map(normalizeOcrDocument);
     } catch (err) {
-      if (attempts === 1 && (err as any)?.name === "TimeoutError") {
-        // En timeout cambiamos inmediatamente a la alternativa más rápida
-        modelName = "gemini-1.5-flash-latest";
-        continue;
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (lastError.message.includes("No se pudo identificar") || lastError.message.includes("Falta configurar")) {
+        throw lastError;
       }
-      throw err instanceof Error ? err : new Error(String(err));
     }
   }
 
-  throw new Error("No fue posible procesar la imagen con Gemini.");
+  // Si falló el que estaba en caché, invalidar caché para la próxima
+  cachedWorkingUrl = null;
+  throw lastError || new Error("No se encontró ningún modelo compatible de Gemini activo en la cuenta.");
 }
 
 function normalizeOcrDocument(raw: any): OcrDocument {
