@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import type { OcrDocument, SheetData } from "@/lib/types";
 import { api, compressImage } from "@/lib/client";
+import { blobToBase64, extractDirectFromGemini } from "@/lib/ocr";
 import ItemFields, { draftFromItem, type ItemDraft } from "./ItemFields";
 
 type PhotoState = {
@@ -52,29 +53,51 @@ export default function PhotoModal({
     if (!files || !files.length) return;
     setError(null);
 
+    // Obtener la clave de lectura desde la sesión autenticada
+    let ocrConfig: { apiKey: string; model?: string } | null = null;
+    try {
+      ocrConfig = await api<{ apiKey: string; model?: string }>("/api/ocr");
+    } catch {
+      // Si no se puede obtener la clave, el catch de abajo lo reportará
+    }
+
     for (const file of Array.from(files)) {
       const id = nextId();
       const url = URL.createObjectURL(file);
       setPhotos((prev) => [...prev, { id, url, status: "reading" }]);
 
       try {
-        // Redimensionar y comprimir en cliente para garantizar que la subida sea inmediata (<100KB)
+        // Redimensionar y comprimir en el dispositivo a ~80KB
         const blob = await compressImage(file, 1080);
-        const form = new FormData();
-        form.append("photo", new File([blob], "factura.jpg", { type: "image/jpeg" }));
+        let extractedDocs: OcrDocument[] = [];
 
-        const result = await api<{ documents: OcrDocument[] }>("/api/ocr", {
-          method: "POST",
-          body: form,
-        });
+        if (ocrConfig?.apiKey) {
+          // Método directo desde el navegador (elimina por completo el error 504 de Vercel)
+          const base64 = await blobToBase64(blob);
+          extractedDocs = await extractDirectFromGemini(
+            ocrConfig.apiKey,
+            base64,
+            "image/jpeg",
+            ocrConfig.model
+          );
+        } else {
+          // Fallback en caso de que no haya configuración directa
+          const form = new FormData();
+          form.append("photo", new File([blob], "factura.jpg", { type: "image/jpeg" }));
+          const result = await api<{ documents: OcrDocument[] }>("/api/ocr", {
+            method: "POST",
+            body: form,
+          });
+          extractedDocs = result.documents || [];
+        }
 
-        if (!result.documents || result.documents.length === 0) {
+        if (!extractedDocs || extractedDocs.length === 0) {
           throw new Error("No se detectaron datos en la factura.");
         }
 
         setDocs((prev) => [
           ...prev,
-          ...result.documents.map((doc) => ({
+          ...extractedDocs.map((doc) => ({
             id: nextId(),
             draft: draftFromItem(doc),
             selected: true,

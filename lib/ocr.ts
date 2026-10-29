@@ -2,7 +2,7 @@ import type { Item, OcrDocument } from "./types";
 
 export type { OcrDocument };
 
-const PROMPT = `Analiza esta imagen de factura o comprobante de gasto (especialmente facturas DTE / FEL de Guatemala) y extrae los datos en formato JSON estricto con esta estructura exacta (sin markdown, sin explicaciones):
+export const PROMPT = `Analiza esta imagen de factura o comprobante de gasto (especialmente facturas DTE / FEL de Guatemala) y extrae los datos en formato JSON estricto con esta estructura exacta (sin markdown, sin explicaciones):
 {
   "documentos": [
     {
@@ -47,77 +47,48 @@ export function ocrEnabled(): boolean {
   return Boolean(process.env.GEMINI_API_KEY?.trim());
 }
 
-// Guardamos en memoria el endpoint exacto que responde OK para no repetir búsquedas
-let cachedWorkingUrl: string | null = null;
-
-async function getAvailableModelUrls(apiKey: string, preferredModel?: string): Promise<string[]> {
-  // 1. Si ya tenemos un endpoint verificado en caché, es el primer candidato
-  if (cachedWorkingUrl) {
-    return [cachedWorkingUrl];
-  }
-
-  const urls: string[] = [];
-
-  // 2. Si el usuario definió un modelo explícito
-  if (preferredModel) {
-    const clean = preferredModel.replace(/^models\//, "");
-    urls.push(`https://generativelanguage.googleapis.com/v1beta/models/${clean}:generateContent`);
-  }
-
-  // 3. Introspección directa con ListModels (el método que garantizó el éxito anteriormente)
-  try {
-    const listRes = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
-      headers: { "x-goog-api-key": apiKey },
-    });
-    if (listRes.ok) {
-      const data = await listRes.json();
-      const models = Array.isArray(data.models) ? data.models : [];
-      const supported = models.filter((m: any) =>
-        Array.isArray(m.supportedGenerationMethods) &&
-        m.supportedGenerationMethods.includes("generateContent")
-      );
-
-      // Priorizar los modelos rápidos (flash primero, luego pro)
-      const flashModels = supported.filter((m: any) => String(m.name).toLowerCase().includes("flash"));
-      const otherModels = supported.filter((m: any) => !String(m.name).toLowerCase().includes("flash"));
-
-      for (const m of [...flashModels, ...otherModels]) {
-        urls.push(`https://generativelanguage.googleapis.com/v1beta/${m.name}:generateContent`);
+export async function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const dataUrl = reader.result as string;
+      const base64 = dataUrl.split(",")[1];
+      if (base64) {
+        resolve(base64);
+      } else {
+        reject(new Error("No se pudo convertir la imagen a base64."));
       }
-    }
-  } catch {
-    // Si la llamada de introspección falla, usamos fallbacks
-  }
-
-  // Fallbacks universales
-  urls.push("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent");
-  urls.push("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent");
-  urls.push("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent");
-
-  return Array.from(new Set(urls));
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
-export async function extractFromPhoto(
+/** Ejecución directa desde el navegador del cliente (evita al 100% el error 504 de Vercel) */
+export async function extractDirectFromGemini(
+  apiKey: string,
   base64: string,
-  mimeType: string
+  mimeType: string,
+  preferredModel?: string
 ): Promise<OcrDocument[]> {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error("Falta configurar la variable GEMINI_API_KEY en Vercel.");
-  }
+  const modelsToTry = [
+    preferredModel?.replace(/^models\//, ""),
+    "gemini-1.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-pro",
+  ].filter(Boolean) as string[];
 
-  const preferredModel = process.env.GEMINI_MODEL?.trim();
-  const endpointUrls = await getAvailableModelUrls(apiKey, preferredModel);
-
+  const uniqueModels = Array.from(new Set(modelsToTry));
   let lastError: Error | null = null;
 
-  for (const url of endpointUrls) {
+  for (const model of uniqueModels) {
     try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
       const response = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
         },
         body: JSON.stringify({
           contents: [
@@ -144,14 +115,10 @@ export async function extractFromPhoto(
 
       if (!response.ok) {
         const errText = await response.text();
-        // Si el endpoint da 404, limpiamos la caché si era este y probamos con el siguiente
-        if (response.status === 404) {
-          if (cachedWorkingUrl === url) {
-            cachedWorkingUrl = null;
-          }
+        if (response.status === 404 && uniqueModels.indexOf(model) < uniqueModels.length - 1) {
           continue;
         }
-        throw new Error(`Google Gemini (${response.status}): ${errText.slice(0, 180)}`);
+        throw new Error(`Google Gemini (${response.status}): ${errText.slice(0, 160)}`);
       }
 
       const data = await response.json();
@@ -160,33 +127,41 @@ export async function extractFromPhoto(
         throw new Error("La IA no devolvió resultados para esta imagen.");
       }
 
-      // Guardar el endpoint que funcionó para responder en < 2 segundos en las próximas llamadas
-      cachedWorkingUrl = url;
-
-      // Limpiar posibles delimitadores de código markdown por seguridad
       const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleaned);
       const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
 
       if (docs.length === 0) {
-        throw new Error("No se pudo identificar una factura válida en la imagen.");
+        throw new Error("No se detectó una factura válida en la imagen.");
       }
 
       return docs.map(normalizeOcrDocument);
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      if (lastError.message.includes("No se pudo identificar") || lastError.message.includes("Falta configurar")) {
+      if (lastError.message.includes("No se detectó") || lastError.message.includes("API key not valid")) {
         throw lastError;
       }
     }
   }
 
-  // Si falló el que estaba en caché, invalidar caché para la próxima
-  cachedWorkingUrl = null;
-  throw lastError || new Error("No se encontró ningún modelo compatible de Gemini activo en la cuenta.");
+  throw lastError || new Error("No se pudo procesar la factura con Gemini.");
 }
 
-function normalizeOcrDocument(raw: any): OcrDocument {
+/** Procesamiento desde el servidor (fallback secundario) */
+export async function extractFromPhoto(
+  base64: string,
+  mimeType: string
+): Promise<OcrDocument[]> {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("Falta configurar la variable GEMINI_API_KEY en Vercel.");
+  }
+
+  const preferredModel = process.env.GEMINI_MODEL?.trim();
+  return extractDirectFromGemini(apiKey, base64, mimeType, preferredModel);
+}
+
+export function normalizeOcrDocument(raw: any): OcrDocument {
   const allowedDocTypes = ["FAC", "FPC", "REC"];
   const tipoDocVal = allowedDocTypes.includes(raw.tipoDoc) ? raw.tipoDoc : "FAC";
 
