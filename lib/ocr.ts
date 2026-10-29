@@ -76,68 +76,82 @@ export async function extractDirectFromGemini(
   _preferredModel?: string  // ignorado — siempre usamos GEMINI_MODEL
 ): Promise<OcrDocument[]> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  const MAX_RETRIES = 3;
 
-  // Timeout de 30 segundos para no quedarse colgado
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30_000);
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    // Timeout de 30 segundos por intento
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30_000);
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: PROMPT },
-              {
-                inline_data: {
-                  mime_type: mimeType || "image/jpeg",
-                  data: base64,
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: PROMPT },
+                {
+                  inline_data: {
+                    mime_type: mimeType || "image/jpeg",
+                    data: base64,
+                  },
                 },
-              },
-            ],
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 1024,
+            response_mime_type: "application/json",
           },
-        ],
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 1024,
-          response_mime_type: "application/json",
-        },
-      }),
-    });
-  } catch (err) {
-    clearTimeout(timeoutId);
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("La IA tardó más de 30 segundos. Intenta con una foto más pequeña o clara.");
+        }),
+      });
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error("La IA tardó más de 30 segundos. Intenta con una foto más pequeña o clara.");
+      }
+      throw err;
     }
-    throw err;
+    clearTimeout(timeoutId);
+
+    // 503 = servidor saturado → reintentar con espera
+    if (response.status === 503 && attempt < MAX_RETRIES) {
+      await new Promise((r) => setTimeout(r, attempt * 2000)); // 2s, 4s
+      continue;
+    }
+
+    if (!response.ok) {
+      const errText = await response.text();
+      if (response.status === 503) {
+        throw new Error("El servicio de IA está saturado en este momento. Intenta de nuevo en unos segundos.");
+      }
+      throw new Error(`Gemini (${response.status}): ${errText.slice(0, 200)}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) {
+      throw new Error("La IA no devolvió resultados para esta imagen.");
+    }
+
+    const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+    const parsed = JSON.parse(cleaned);
+    const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
+
+    if (docs.length === 0) {
+      throw new Error("No se detectó una factura válida en la imagen.");
+    }
+
+    return docs.map(normalizeOcrDocument);
   }
-  clearTimeout(timeoutId);
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini (${response.status}): ${errText.slice(0, 200)}`);
-  }
-
-  const data = await response.json();
-  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) {
-    throw new Error("La IA no devolvió resultados para esta imagen.");
-  }
-
-  const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
-  const parsed = JSON.parse(cleaned);
-  const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
-
-  if (docs.length === 0) {
-    throw new Error("No se detectó una factura válida en la imagen.");
-  }
-
-  return docs.map(normalizeOcrDocument);
+  throw new Error("El servicio de IA está saturado. Por favor intenta de nuevo en unos momentos.");
 }
 
 /** Procesamiento desde el servidor (fallback) */
