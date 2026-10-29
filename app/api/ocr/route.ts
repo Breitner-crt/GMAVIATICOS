@@ -1,1 +1,33 @@
-import { NextResponse } from "next/server";\nimport { extractFromPhoto, ocrEnabled } from "@/lib/ocr";\nimport { jsonError } from "@/lib/http";\n\nexport const dynamic = "force-dynamic";\n\nexport async function POST(req: Request) {\n  try {\n    if (!ocrEnabled()) {\n      return NextResponse.json(\n        { error: "El servicio de lectura no está configurado (falta GROQ_API_KEY)." },\n        { status: 400 }\n      );\n    }\n\n    const formData = await req.formData();\n    const file = formData.get("photo") as File | null;\n\n    if (!file) {\n      return NextResponse.json({ error: "No se adjuntó ninguna imagen." }, { status: 400 });\n    }\n\n    const buffer = Buffer.from(await file.arrayBuffer());\n    const base64 = buffer.toString("base64");\n    const mimeType = file.type || "image/jpeg";\n\n    const documents = await extractFromPhoto(base64, mimeType);\n\n    return NextResponse.json({ documents });\n  } catch (error) {\n    return jsonError(error);\n  }\n}\n
+import { NextResponse } from "next/server";
+import { extractFromPhoto, ocrEnabled } from "@/lib/ocr";
+import { jsonError } from "@/lib/http";
+
+export const dynamic = "force-dynamic";
+
+export async function POST(req: Request) {
+  try {
+    if (!ocrEnabled()) {
+      return NextResponse.json(
+        { error: "El servicio de lectura no está configurado (falta GROQ_API_KEY)." },
+        { status: 400 }
+      );
+    }
+
+    const formData = await req.formData();
+    const file = formData.get("photo") as File | null;
+
+    if (!file) {
+      return NextResponse.json({ error: "No se adjuntó ninguna imagen." }, { status: 400 });
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const base64 = buffer.toString("base64");
+    const mimeType = file.type || "image/jpeg";
+
+    const documents = await extractFromPhoto(base64, mimeType);
+
+    return NextResponse.json({ documents });
+  } catch (error) {
+    return jsonError(error);
+  }
+}
