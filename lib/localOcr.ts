@@ -103,7 +103,12 @@ async function applyCamScannerFilter(imageBlob: Blob): Promise<Blob> {
 /**
  * Ejecuta OCR local en el navegador sobre un Blob aplicando el filtro CamScanner.
  */
-export async function runLocalOcr(imageBlob: Blob): Promise<OcrDocument> {
+interface OcrResult {
+  doc: OcrDocument;
+  text: string;
+}
+
+export async function runLocalOcr(imageBlob: Blob): Promise<OcrResult> {
   // Aplicar filtro de escaneo profesional antes de leer con Tesseract
   const processedBlob = await applyCamScannerFilter(imageBlob);
   
@@ -111,5 +116,7 @@ export async function runLocalOcr(imageBlob: Blob): Promise<OcrDocument> {
   const ret = await worker.recognize(processedBlob);
   const text = ret.data.text || "";
 
-  return parseGuatemalaInvoiceText(text);
+  const doc = parseGuatemalaInvoiceText(text);
+
+  return { doc, text };
 }
