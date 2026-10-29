@@ -2,7 +2,9 @@ import type { Item, OcrDocument } from "./types";
 
 export type { OcrDocument };
 
-export const DEFAULT_MODEL = "gemini-3.8-flash";
+/** Modelo único confirmado compatible con claves AQ de Google AI Studio */
+export const GEMINI_MODEL = "gemini-3.8-flash";
+export const DEFAULT_MODEL = GEMINI_MODEL; // alias para compatibilidad
 
 export const PROMPT = `Analiza esta imagen de factura o comprobante de gasto (especialmente facturas DTE / FEL de Guatemala) y extrae los datos en formato JSON estricto con esta estructura exacta (sin markdown, sin explicaciones):
 {
@@ -66,88 +68,61 @@ export async function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-/** Ejecución con el modelo oficial activo de Google AI Studio (gemini-3.8-flash) */
+/** Llamada directa a Gemini desde el navegador — modelo fijo gemini-3.8-flash */
 export async function extractDirectFromGemini(
   apiKey: string,
   base64: string,
   mimeType: string,
-  preferredModel?: string
+  _preferredModel?: string  // ignorado — siempre usamos GEMINI_MODEL
 ): Promise<OcrDocument[]> {
-  const modelsToTry = [
-    preferredModel?.replace(/^models\//, ""),
-    DEFAULT_MODEL,
-    "gemini-3.8-flash-lite",
-    "gemini-flash-latest",
-    "gemini-2.5-flash",
-  ].filter(Boolean) as string[];
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
-  const uniqueModels = Array.from(new Set(modelsToTry));
-  let lastError: Error | null = null;
-
-  for (const model of uniqueModels) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: PROMPT },
             {
-              role: "user",
-              parts: [
-                { text: PROMPT },
-                {
-                  inline_data: {
-                    mime_type: mimeType || "image/jpeg",
-                    data: base64,
-                  },
-                },
-              ],
+              inline_data: {
+                mime_type: mimeType || "image/jpeg",
+                data: base64,
+              },
             },
           ],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 1024,
-            response_mime_type: "application/json",
-          },
-        }),
-      });
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 1024,
+        response_mime_type: "application/json",
+      },
+    }),
+  });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        if (response.status === 404 && uniqueModels.indexOf(model) < uniqueModels.length - 1) {
-          continue;
-        }
-        throw new Error(`Google Gemini (${response.status}): ${errText.slice(0, 160)}`);
-      }
-
-      const data = await response.json();
-      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!rawText) {
-        throw new Error("La IA no devolvió resultados para esta imagen.");
-      }
-
-      const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
-      const parsed = JSON.parse(cleaned);
-      const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
-
-      if (docs.length === 0) {
-        throw new Error("No se detectó una factura válida en la imagen.");
-      }
-
-      return docs.map(normalizeOcrDocument);
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      if (lastError.message.includes("No se detectó") || lastError.message.includes("API key not valid")) {
-        throw lastError;
-      }
-    }
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Gemini (${response.status}): ${errText.slice(0, 200)}`);
   }
 
-  throw lastError || new Error("No se pudo procesar la factura con Gemini.");
+  const data = await response.json();
+  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawText) {
+    throw new Error("La IA no devolvió resultados para esta imagen.");
+  }
+
+  const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+  const parsed = JSON.parse(cleaned);
+  const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
+
+  if (docs.length === 0) {
+    throw new Error("No se detectó una factura válida en la imagen.");
+  }
+
+  return docs.map(normalizeOcrDocument);
 }
 
 /** Procesamiento desde el servidor (fallback) */

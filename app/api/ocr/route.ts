@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { extractFromPhoto, ocrEnabled } from "@/lib/ocr";
+import { extractFromPhoto, ocrEnabled, GEMINI_MODEL } from "@/lib/ocr";
 import { jsonError } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export async function GET() {
 
   return NextResponse.json({
     apiKey: process.env.GEMINI_API_KEY?.trim(),
-    model: process.env.GEMINI_MODEL?.trim() || "gemini-1.5-flash",
+    model: GEMINI_MODEL, // siempre gemini-3.8-flash, ignoramos env var GEMINI_MODEL
   });
 }
 
