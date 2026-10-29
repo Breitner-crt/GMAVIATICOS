@@ -44,7 +44,7 @@ Reglas estrictas de extracción:
 7. "tipoDoc": debe ser "FAC" (factura general), "FPC" (factura pequeño contribuyente) o "REC" (recibo).`;
 
 export function ocrEnabled(): boolean {
-  return Boolean(process.env.GEMINI_API_KEY?.trim());
+  return Boolean(process.env.GEMINI_API_KEY?.trim() || process.env.GROQ_API_KEY?.trim());
 }
 
 export async function blobToBase64(blob: Blob): Promise<string> {
@@ -64,21 +64,57 @@ export async function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-/** Ejecución directa desde el navegador del cliente (evita al 100% el error 504 de Vercel) */
+/** Ejecución directa desde el navegador (sin límite de 10s ni error 504 de Vercel) */
 export async function extractDirectFromGemini(
   apiKey: string,
   base64: string,
   mimeType: string,
   preferredModel?: string
 ): Promise<OcrDocument[]> {
-  const modelsToTry = [
-    preferredModel?.replace(/^models\//, ""),
+  const modelsToTry: string[] = [];
+
+  if (preferredModel) {
+    modelsToTry.push(preferredModel.replace(/^models\//, ""));
+  }
+
+  // 1. Preguntarle directamente a Google qué modelos tiene activos esta clave
+  try {
+    const listRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+    );
+    if (listRes.ok) {
+      const data = await listRes.json();
+      const models = Array.isArray(data.models) ? data.models : [];
+      const supported = models.filter((m: any) =>
+        Array.isArray(m.supportedGenerationMethods) &&
+        m.supportedGenerationMethods.includes("generateContent")
+      );
+
+      // Priorizar variantes flash
+      const flash = supported.filter((m: any) => String(m.name).toLowerCase().includes("flash"));
+      const others = supported.filter((m: any) => !String(m.name).toLowerCase().includes("flash"));
+
+      for (const m of [...flash, ...others]) {
+        modelsToTry.push(String(m.name).replace(/^models\//, ""));
+      }
+    }
+  } catch {
+    // Si falla el listado, usamos la lista de respaldo abajo
+  }
+
+  // 2. Respaldos universales
+  modelsToTry.push(
+    "gemini-1.5-flash-8b",
+    "gemini-2.0-flash-exp",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-flash-002",
     "gemini-1.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-pro",
-  ].filter(Boolean) as string[];
+    "gemini-1.5-pro-002",
+    "gemini-1.5-pro"
+  );
 
-  const uniqueModels = Array.from(new Set(modelsToTry));
+  const uniqueModels = Array.from(new Set(modelsToTry.filter(Boolean)));
   let lastError: Error | null = null;
 
   for (const model of uniqueModels) {
@@ -144,10 +180,10 @@ export async function extractDirectFromGemini(
     }
   }
 
-  throw lastError || new Error("No se pudo procesar la factura con Gemini.");
+  throw lastError || new Error("No se encontró ningún modelo compatible de Gemini activo en la cuenta.");
 }
 
-/** Procesamiento desde el servidor (fallback secundario) */
+/** Procesamiento desde el servidor (fallback) */
 export async function extractFromPhoto(
   base64: string,
   mimeType: string
