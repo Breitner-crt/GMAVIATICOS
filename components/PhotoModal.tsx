@@ -268,7 +268,7 @@ export default function PhotoModal({
                     </span>
                   </div>
 
-                  <ItemFields item={doc.draft} onChange={(k, v) => updateDoc(doc.id, k, v)} />
+                  <ItemFields value={doc.draft} onChange={(k, v) => updateDoc(doc.id, k, v)} />
                 </div>
               ))}
             </div>
