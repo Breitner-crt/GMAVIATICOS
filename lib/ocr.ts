@@ -1,5 +1,4 @@
 import type { Item, OcrDocument } from "./types";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export type { OcrDocument };
 
@@ -44,30 +43,50 @@ export async function extractFromPhoto(
     throw new Error("Falta configurar GEMINI_API_KEY en Vercel.");
   }
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  // Usamos gemini-1.5-flash con el SDK oficial, que es el modelo estándar y estable de Google
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  // Usamos la API REST directa de Gemini v1beta que acepta perfectamente cualquier clave (incluyendo las AQ...)
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
 
-  const result = await model.generateContent([
-    PROMPT,
-    {
-      inlineData: {
-        data: base64,
-        mimeType: mimeType || "image/jpeg",
-      },
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
     },
-  ]);
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: PROMPT },
+            {
+              inline_data: {
+                mime_type: mimeType || "image/jpeg",
+                data: base64,
+              },
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        response_mime_type: "application/json",
+      },
+    }),
+  });
 
-  const responseText = result.response.text();
-  if (!responseText) {
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Error en Google Gemini (${response.status}): ${errText.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
     throw new Error("La IA no devolvió resultados.");
   }
 
-  // Limpiar posibles bloques de código markdown si la IA los incluye
-  const cleanJson = responseText.replace(/```json/g, "").replace(/```/g, "").trim();
-
   try {
-    const parsed = JSON.parse(cleanJson);
+    const parsed = JSON.parse(text);
     const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
     return docs.map(normalizeOcrDocument);
   } catch {
