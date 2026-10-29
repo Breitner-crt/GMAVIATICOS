@@ -91,10 +91,16 @@ export async function extractFromPhoto(
 }
 
 function normalizeOcrDocument(raw: any): OcrDocument {
+  const allowedDocTypes = ["FAC", "FPC", "REC"];
+  const tipoDocVal = allowedDocTypes.includes(raw.tipoDoc) ? raw.tipoDoc : "FAC";
+
+  const allowedComb = ["S", "R", "D"];
+  const tipoCombVal = allowedComb.includes(raw.tipoComb) ? raw.tipoComb : "";
+
   return {
     proveedor: String(raw.proveedor || "").toUpperCase(),
     nit: String(raw.nit || ""),
-    tipoDoc: ["FAC", "FPC", "REC"].includes(raw.tipoDoc) ? raw.tipoDoc : "FAC",
+    tipoDoc: tipoDocVal,
     serie: String(raw.serie || ""),
     numero: String(raw.numero || ""),
     fecha: String(raw.fecha || new Date().toISOString().split("T")[0]),
@@ -103,7 +109,7 @@ function normalizeOcrDocument(raw: any): OcrDocument {
     tipoGasto: String(raw.tipoGasto || "Viáticos"),
     valor: String(raw.valor || "0"),
     galones: String(raw.galones || ""),
-    tipoComb: ["S", "R", "D"].includes(raw.tipoComb) ? raw.tipoComb : "",
+    tipoComb: tipoCombVal,
     inguat: String(raw.inguat || ""),
     pais: String(raw.pais || "GUATEMALA").toUpperCase(),
     sitio: String(raw.sitio || "").toUpperCase(),
