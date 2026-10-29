@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import type { OcrDocument, SheetData } from "@/lib/types";
 import { api, compressImage } from "@/lib/client";
 import ItemFields, { draftFromItem, type ItemDraft } from "./ItemFields";
+import { createWorker } from "tesseract.js";
 
 type PhotoState = {
   id: string;
@@ -58,23 +59,24 @@ export default function PhotoModal({
       setPhotos((prev) => [...prev, { id, url, status: "reading" }]);
 
       try {
-        const blob = await compressImage(file, 1280);
-        const form = new FormData();
-        form.append("photo", new File([blob], "factura.jpg", { type: "image/jpeg" }));
+        const blob = await compressImage(file, 1000);
+        
+        // Ejecutar Tesseract directamente en el navegador del cliente
+        const worker = await createWorker("spa");
+        const ret = await worker.recognize(blob);
+        await worker.terminate();
 
-        const result = await api<{ documents: OcrDocument[] }>("/api/ocr", {
-          method: "POST",
-          body: form,
-        });
+        const text = ret.data.text || "";
+        const doc = parseReceiptText(text);
 
         setDocs((prev) => [
           ...prev,
-          ...result.documents.map((doc) => ({
+          {
             id: nextId(),
             draft: draftFromItem(doc),
             selected: true,
             confianza: doc.confianza,
-          })),
+          },
         ]);
 
         setPhotos((prev) =>
@@ -93,6 +95,93 @@ export default function PhotoModal({
 
     if (cameraRef.current) cameraRef.current.value = "";
     if (galleryRef.current) galleryRef.current.value = "";
+  }
+
+  function parseReceiptText(text: string): OcrDocument {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const fullText = text.toUpperCase();
+
+    let nit = "";
+    const nitMatch = fullText.match(/NIT[:\s]*([0-9A-Z-]+)/);
+    if (nitMatch) {
+      nit = nitMatch[1].replace(/[^0-9Kk]/g, "");
+    } else {
+      const digitsOnly = fullText.match(/\b\d{6,10}-?[0-9Kk]?\b/);
+      if (digitsOnly) nit = digitsOnly[0];
+    }
+
+    let valor = "";
+    const totalMatches = fullText.match(/(?:TOTAL|TOT|VALOR|SUMA)[:\s]*Q?\.?\s*([0-9]+[.,][0-9]{2})/g);
+    if (totalMatches && totalMatches.length > 0) {
+      const lastMatch = totalMatches[totalMatches.length - 1];
+      const numMatch = lastMatch.match(/([0-9]+[.,][0-9]{2})/);
+      if (numMatch) valor = numMatch[1].replace(",", ".");
+    }
+
+    if (!valor) {
+      const amounts = fullText.match(/\b[0-9]{1,4}[.,][0-9]{2}\b/g);
+      if (amounts && amounts.length > 0) {
+        const nums = amounts.map((a) => Number(a.replace(",", "."))).filter((n) => !isNaN(n));
+        if (nums.length > 0) valor = String(Math.max(...nums));
+      }
+    }
+
+    let fecha = "";
+    const dateMatch = fullText.match(/\b(20[2-3][0-9])[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12][0-9]|3[01])\b/) ||
+                      fullText.match(/\b(0[1-9]|[12][0-9]|3[01])[-/.](0[1-9]|1[0-2])[-/.](20[2-3][0-9])\b/);
+    if (dateMatch) {
+      if (dateMatch[1].length === 4) {
+        fecha = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+      } else {
+        fecha = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+      }
+    } else {
+      fecha = new Date().toISOString().split("T")[0];
+    }
+
+    let placa = "";
+    const placaMatch = fullText.match(/\b([P|C|A|U|M]\d{3}[A-Z]{3})\b/) || fullText.match(/PLACA[:\s]*([A-Z0-9-]+)/);
+    if (placaMatch) placa = placaMatch[1];
+
+    let tipoGasto = "Viáticos";
+    let tipoComb = "";
+    let galones = "";
+
+    if (fullText.includes("SUPER") || fullText.includes("REGULAR") || fullText.includes("DIESEL") || fullText.includes("COMBUSTIBLE") || fullText.includes("GASOLINERA")) {
+      tipoGasto = "Combustible";
+      if (fullText.includes("SUPER") || fullText.includes("SUP")) tipoComb = "S";
+      else if (fullText.includes("DIESEL") || fullText.includes("DIES")) tipoComb = "D";
+      else tipoComb = "R";
+
+      const galMatch = fullText.match(/([0-9]+[.,][0-9]{1,3})\s*(?:GAL|GLS|GALONES)/);
+      if (galMatch) galones = galMatch[1].replace(",", ".");
+    } else if (fullText.includes("HOTEL") || fullText.includes("HOSPEDAJE")) {
+      tipoGasto = "Hospedaje";
+    }
+
+    let proveedor = lines[0] || "ESTABLECIMIENTO";
+    if (proveedor.length < 3 && lines[1]) proveedor = lines[1];
+
+    let concepto = tipoGasto === "Combustible" ? `CONSUMO DE COMBUSTIBLE` : `${tipoGasto.toUpperCase()} VARIOS`;
+
+    return {
+      proveedor: proveedor.toUpperCase(),
+      nit: nit.replace(/[^0-9Kk-]/g, ""),
+      tipoDoc: "FAC",
+      serie: "",
+      numero: "",
+      fecha,
+      placa: placa.toUpperCase(),
+      concepto,
+      tipoGasto,
+      valor,
+      galones,
+      tipoComb,
+      inguat: "",
+      pais: "GUATEMALA",
+      sitio: "",
+      confianza: "media",
+    };
   }
 
   function updateDoc(id: string, key: keyof ItemDraft, value: string) {
@@ -142,98 +231,93 @@ export default function PhotoModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 backdrop-blur-sm sm:items-center sm:p-6">
-      <div className="flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl">
-        <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:rounded-t-3xl">
+    <div className=\"fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 backdrop-blur-sm sm:items-center sm:p-6\">
+      <div className=\"flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl\">
+        <header className=\"flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:rounded-t-3xl\">
           <div>
-            <h2 className="text-base font-semibold">Capturar facturas con IA</h2>
-            <p className="text-xs text-slate-500">
-              Sube la foto y la IA extraerá los datos al instante.
+            <h2 className=\"text-base font-semibold\">Capturar facturas (Local)</h2>
+            <p className=\"text-xs text-slate-500\">
+              Procesamiento directo en tu dispositivo.
             </p>
           </div>
           <button
-            type="button"
+            type=\"button\"
             onClick={onClose}
-            className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
-            aria-label="Cerrar"
+            className=\"rounded-full p-2 text-slate-500 hover:bg-slate-100\"
+            aria-label=\"Cerrar\"
           >
-            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
+            <svg viewBox=\"0 0 24 24\" className=\"h-5 w-5\" fill=\"none\" stroke=\"currentColor\" strokeWidth=\"2\">
+              <path d=\"M6 6l12 12M18 6L6 18\" strokeLinecap=\"round\" />
             </svg>
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+        <div className=\"flex-1 overflow-y-auto p-5 space-y-5\">
           {error && (
-            <div className="rounded-xl bg-rose-50 p-3 text-xs font-medium text-rose-700">
+            <div className=\"rounded-xl bg-rose-50 p-3 text-xs font-medium text-rose-700\">
               {error}
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className=\"grid grid-cols-2 gap-3\">
             <button
-              type="button"
+              type=\"button\"
               onClick={() => cameraRef.current?.click()}
-              className="flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-6 text-center hover:border-emerald-500 hover:bg-emerald-50/50"
+              className=\"flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-6 text-center hover:border-emerald-500 hover:bg-emerald-50/50\"
             >
-              <svg className="h-8 w-8 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+              <svg className=\"h-8 w-8 text-emerald-600\" fill=\"none\" viewBox=\"0 0 24 24\" stroke=\"currentColor\" strokeWidth=\"2\">
+                <path strokeLinecap=\"round\" strokeLinejoin=\"round\" d=\"M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z\" />
+                <path strokeLinecap=\"round\" strokeLinejoin=\"round\" d=\"M15 13a3 3 0 11-6 0 3 3 0 016 0z\" />
               </svg>
-              <span className="text-xs font-semibold text-slate-700">Tomar foto</span>
+              <span className=\"text-xs font-semibold text-slate-700\">Tomar foto</span>
             </button>
 
             <button
-              type="button"
+              type=\"button\"
               onClick={() => galleryRef.current?.click()}
-              className="flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-6 text-center hover:border-emerald-500 hover:bg-emerald-50/50"
+              className=\"flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-6 text-center hover:border-emerald-500 hover:bg-emerald-50/50\"
             >
-              <svg className="h-8 w-8 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              <svg className=\"h-8 w-8 text-emerald-600\" fill=\"none\" viewBox=\"0 0 24 24\" stroke=\"currentColor\" strokeWidth=\"2\">
+                <path strokeLinecap=\"round\" strokeLinejoin=\"round\" d=\"M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z\" />
               </svg>
-              <span className="text-xs font-semibold text-slate-700">Elegir de galería</span>
+              <span className=\"text-xs font-semibold text-slate-700\">Elegir de galería</span>
             </button>
           </div>
 
           <input
             ref={cameraRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="hidden"
+            type=\"file\"
+            accept=\"image/*\"
+            capture=\"environment\"
+            className=\"hidden\"
             onChange={(e) => handleFiles(e.target.files)}
           />
           <input
             ref={galleryRef}
-            type="file"
-            accept="image/*"
+            type=\"file\"
+            accept=\"image/*\"
             multiple
-            className="hidden"
+            className=\"hidden\"
             onChange={(e) => handleFiles(e.target.files)}
           />
 
           {photos.length > 0 && (
-            <div className="space-y-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <div className=\"space-y-3\">
+              <h3 className=\"text-xs font-semibold uppercase tracking-wider text-slate-500\">
                 Imágenes cargadas
               </h3>
-              <div className="flex gap-2 overflow-x-auto pb-2">
+              <div className=\"flex gap-2 overflow-x-auto pb-2\">
                 {photos.map((p) => (
-                  <div key={p.id} className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
-                    <img src={p.url} alt="Factura" className="h-full w-full object-cover" />
-                    {p.status === "reading" && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-slate-900/60 text-[10px] font-medium text-white px-1 text-center">
-                        Leyendo IA...
+                  <div key={p.id} className=\"relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100\">
+                    <img src={p.url} alt=\"Factura\" className=\"h-full w-full object-cover\" />
+                    {p.status === \"reading\" && (
+                      <div className=\"absolute inset-0 flex items-center justify-center bg-slate-900/60 text-[10px] font-medium text-white px-1 text-center\">
+                        Analizando...
                       </div>
                     )}
-                    {p.status === "done" && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-emerald-900/60 text-[10px] font-medium text-white px-1 text-center">
+                    {p.status === \"done\" && (
+                      <div className=\"absolute inset-0 flex items-center justify-center bg-emerald-900/60 text-[10px] font-medium text-white px-1 text-center\">
                         Listo
-                      </div>
-                    )}
-                    {p.status === "error" && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-rose-900/80 text-[10px] font-medium text-white px-1 text-center">
-                        Error
                       </div>
                     )}
                   </div>
@@ -243,24 +327,24 @@ export default function PhotoModal({
           )}
 
           {docs.length > 0 && (
-            <div className="space-y-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <div className=\"space-y-4\">
+              <h3 className=\"text-xs font-semibold uppercase tracking-wider text-slate-500\">
                 Gastos detectados ({docs.length})
               </h3>
               {docs.map((doc) => (
-                <div key={doc.id} className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3 shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                <div key={doc.id} className=\"rounded-2xl border border-slate-200 bg-white p-4 space-y-3 shadow-sm\">
+                  <div className=\"flex items-center justify-between\">
+                    <label className=\"flex items-center gap-2 text-xs font-medium text-slate-700\">
                       <input
-                        type="checkbox"
+                        type=\"checkbox\"
                         checked={doc.selected}
                         onChange={() => toggleDoc(doc.id)}
-                        className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                        className=\"h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500\"
                       />
                       Incluir en la liquidación
                     </label>
-                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 uppercase">
-                      Leído por IA (Groq)
+                    <span className=\"rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 uppercase\">
+                      Procesado localmente
                     </span>
                   </div>
 
@@ -271,21 +355,21 @@ export default function PhotoModal({
           )}
         </div>
 
-        <footer className="flex items-center justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:rounded-b-3xl">
+        <footer className=\"flex items-center justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:rounded-b-3xl\">
           <button
-            type="button"
+            type=\"button\"
             onClick={onManual}
-            className="rounded-xl px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+            className=\"rounded-xl px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100\"
           >
             Agregar a mano
           </button>
           <button
-            type="button"
+            type=\"button\"
             disabled={!selected.length || busy}
             onClick={save}
-            className="rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:opacity-50"
+            className=\"rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:opacity-50\"
           >
-            {busy ? "Guardando..." : `Guardar ${selected.length} gasto(s)`}
+            {busy ? \"Guardando...\" : `Guardar ${selected.length} gasto(s)`}
           </button>
         </footer>
       </div>
