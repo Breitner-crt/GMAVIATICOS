@@ -1,10 +1,12 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { OcrDocument, SheetData } from "@/lib/types";
 import { api, compressImage } from "@/lib/client";
-import { blobToBase64, extractDirectFromGemini } from "@/lib/ocr";
+import { blobToBase64, extractDirectFromGemini, DEFAULT_MODEL } from "@/lib/ocr";
 import ItemFields, { draftFromItem, type ItemDraft } from "./ItemFields";
+
+const LOCAL_STORAGE_KEY = "gm_gemini_api_key";
 
 type PhotoState = {
   id: string;
@@ -44,21 +46,53 @@ export default function PhotoModal({
   const [docs, setDocs] = useState<DocState[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [localKey, setLocalKey] = useState<string>("");
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [tempKeyInput, setTempKeyInput] = useState("");
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
 
   const selected = docs.filter((doc) => doc.selected);
 
+  useEffect(() => {
+    // Cargar clave guardada en el dispositivo
+    const saved = localStorage.getItem(LOCAL_STORAGE_KEY) || "";
+    setLocalKey(saved);
+  }, []);
+
+  function saveLocalKey() {
+    const trimmed = tempKeyInput.trim();
+    if (!trimmed) return;
+    localStorage.setItem(LOCAL_STORAGE_KEY, trimmed);
+    setLocalKey(trimmed);
+    setShowKeyInput(false);
+    setError(null);
+  }
+
   async function handleFiles(files: FileList | null) {
     if (!files || !files.length) return;
     setError(null);
 
-    // Obtener la clave de lectura desde la sesión autenticada
-    let ocrConfig: { apiKey: string; model?: string } | null = null;
-    try {
-      ocrConfig = await api<{ apiKey: string; model?: string }>("/api/ocr");
-    } catch {
-      // Si no se puede obtener la clave, el catch de abajo lo reportará
+    // 1. Obtener la clave activa (prioridad: localStorage del dispositivo, luego Vercel)
+    let activeKey = localKey;
+    let activeModel = DEFAULT_MODEL;
+
+    if (!activeKey) {
+      try {
+        const ocrConfig = await api<{ apiKey?: string; model?: string }>("/api/ocr");
+        if (ocrConfig?.apiKey) {
+          activeKey = ocrConfig.apiKey;
+          activeModel = ocrConfig.model || DEFAULT_MODEL;
+        }
+      } catch {
+        /* no configurada en Vercel */
+      }
+    }
+
+    if (!activeKey) {
+      setShowKeyInput(true);
+      setError("Por favor ingresa tu clave de Google Gemini para iniciar la lectura.");
+      return;
     }
 
     for (const file of Array.from(files)) {
@@ -69,27 +103,15 @@ export default function PhotoModal({
       try {
         // Redimensionar y comprimir en el dispositivo a ~80KB
         const blob = await compressImage(file, 1080);
-        let extractedDocs: OcrDocument[] = [];
+        const base64 = await blobToBase64(blob);
 
-        if (ocrConfig?.apiKey) {
-          // Método directo desde el navegador (elimina por completo el error 504 de Vercel)
-          const base64 = await blobToBase64(blob);
-          extractedDocs = await extractDirectFromGemini(
-            ocrConfig.apiKey,
-            base64,
-            "image/jpeg",
-            ocrConfig.model
-          );
-        } else {
-          // Fallback en caso de que no haya configuración directa
-          const form = new FormData();
-          form.append("photo", new File([blob], "factura.jpg", { type: "image/jpeg" }));
-          const result = await api<{ documents: OcrDocument[] }>("/api/ocr", {
-            method: "POST",
-            body: form,
-          });
-          extractedDocs = result.documents || [];
-        }
+        // Llamada directa con gemini-3.8-flash (cero error 504)
+        const extractedDocs = await extractDirectFromGemini(
+          activeKey,
+          base64,
+          "image/jpeg",
+          activeModel
+        );
 
         if (!extractedDocs || extractedDocs.length === 0) {
           throw new Error("No se detectaron datos en la factura.");
@@ -179,19 +201,69 @@ export default function PhotoModal({
               Fotografía o sube facturas para extraer automáticamente sus datos.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
-            aria-label="Cerrar"
-          >
-            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setShowKeyInput(!showKeyInput)}
+              className="rounded-full p-2 text-slate-500 hover:bg-slate-100 text-xs"
+              title="Configurar clave Gemini"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
+              aria-label="Cerrar"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          {showKeyInput && (
+            <div className="rounded-2xl border border-brand-200 bg-brand-50/60 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-brand-900">
+                  Clave de Gemini API (se guarda en tu dispositivo)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowKeyInput(false)}
+                  className="text-xs text-slate-400 hover:text-slate-600"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  placeholder="Pega aquí tu clave (AQ...)"
+                  value={tempKeyInput}
+                  onChange={(e) => setTempKeyInput(e.target.value)}
+                  className="flex-1 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs focus:border-brand-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={saveLocalKey}
+                  className="rounded-xl bg-brand-600 px-4 py-2 text-xs font-semibold text-white hover:bg-brand-500"
+                >
+                  Guardar
+                </button>
+              </div>
+              {localKey && (
+                <p className="text-[11px] text-emerald-700 font-medium">
+                  ✓ Clave guardada correctamente en este navegador.
+                </p>
+              )}
+            </div>
+          )}
+
           {error && (
             <div className="rounded-xl bg-rose-50 p-3 text-xs font-medium text-rose-700">
               {error}
