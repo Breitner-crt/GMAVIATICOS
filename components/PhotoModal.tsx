@@ -58,44 +58,30 @@ export default function PhotoModal({
       setPhotos((prev) => [...prev, { id, url, status: "reading" }]);
 
       try {
-        // Optimizar imagen localmente
-        await compressImage(file, 1000);
+        const blob = await compressImage(file, 1280);
+        const form = new FormData();
+        form.append("photo", new File([blob], "factura.jpg", { type: "image/jpeg" }));
 
-        // Generar un documento inicial inteligente para que el usuario ingrese o confirme montos al instante
-        const doc: OcrDocument = {
-          proveedor: file.name.replace(/\.[^/.]+$/, "").toUpperCase(),
-          nit: "CF",
-          tipoDoc: "FAC",
-          serie: "",
-          numero: "",
-          fecha: new Date().toISOString().split("T")[0],
-          placa: "",
-          concepto: "GASTO GENERAL / FACTURA",
-          tipoGasto: "Viáticos",
-          valor: "",
-          galones: "",
-          tipoComb: "",
-          inguat: "",
-          pais: "GUATEMALA",
-          sitio: "",
-          confianza: "media",
-        };
+        const result = await api<{ documents: OcrDocument[] }>("/api/ocr", {
+          method: "POST",
+          body: form,
+        });
 
         setDocs((prev) => [
           ...prev,
-          {
+          ...result.documents.map((doc) => ({
             id: nextId(),
             draft: draftFromItem(doc),
             selected: true,
             confianza: doc.confianza,
-          },
+          })),
         ]);
 
         setPhotos((prev) =>
           prev.map((photo) => (photo.id === id ? { ...photo, status: "done" } : photo))
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : "No se pudo procesar la foto.";
+        const message = err instanceof Error ? err.message : "No se pudo leer la foto.";
         setPhotos((prev) =>
           prev.map((photo) =>
             photo.id === id ? { ...photo, status: "error", error: message } : photo
@@ -160,9 +146,9 @@ export default function PhotoModal({
       <div className="flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl">
         <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:rounded-t-3xl">
           <div>
-            <h2 className="text-base font-semibold">Adjuntar comprobante</h2>
+            <h2 className="text-base font-semibold">Capturar facturas con IA</h2>
             <p className="text-xs text-slate-500">
-              Captura o selecciona tu factura para registrarla al instante.
+              Sube la foto y la IA extraerá los datos al instante.
             </p>
           </div>
           <button
@@ -235,9 +221,19 @@ export default function PhotoModal({
                 {photos.map((p) => (
                   <div key={p.id} className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
                     <img src={p.url} alt="Factura" className="h-full w-full object-cover" />
+                    {p.status === "reading" && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-slate-900/60 text-[10px] font-medium text-white px-1 text-center">
+                        Leyendo IA...
+                      </div>
+                    )}
                     {p.status === "done" && (
                       <div className="absolute inset-0 flex items-center justify-center bg-emerald-900/60 text-[10px] font-medium text-white px-1 text-center">
                         Listo
+                      </div>
+                    )}
+                    {p.status === "error" && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-rose-900/80 text-[10px] font-medium text-white px-1 text-center">
+                        Error
                       </div>
                     )}
                   </div>
@@ -264,7 +260,7 @@ export default function PhotoModal({
                       Incluir en la liquidación
                     </label>
                     <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 uppercase">
-                      Capturado localmente
+                      Leído por IA (Groq)
                     </span>
                   </div>
 
