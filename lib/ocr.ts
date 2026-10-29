@@ -12,7 +12,7 @@ const RESPONSE_SCHEMA = {
         properties: {
           proveedor: { type: "STRING" },
           nit: { type: "STRING" },
-          tipoDoc: { type: "STRING", enum: ["FAC", "FPC", "REC", ""] },
+          tipoDoc: { type: "STRING", enum: ["FAC", "FPC", "REC"] },
           serie: { type: "STRING" },
           numero: { type: "STRING" },
           fecha: { type: "STRING" },
@@ -28,12 +28,11 @@ const RESPONSE_SCHEMA = {
               "Proveedores",
               "Comisión",
               "Otros",
-              "",
             ],
           },
           valor: { type: "NUMBER" },
           galones: { type: "NUMBER" },
-          tipoComb: { type: "STRING", enum: ["S", "R", "D", ""] },
+          tipoComb: { type: "STRING", enum: ["S", "R", "D"] },
           inguat: { type: "NUMBER" },
           pais: { type: "STRING" },
           sitio: { type: "STRING" },
@@ -86,7 +85,7 @@ export async function extractFromPhoto(
     );
   }
 
-  const model = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+  const model = process.env.GEMINI_MODEL?.trim() || "gemini-3.8-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     model
   )}:generateContent`;
