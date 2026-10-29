@@ -47,6 +47,61 @@ export function ocrEnabled(): boolean {
   return Boolean(process.env.GEMINI_API_KEY?.trim());
 }
 
+async function getAvailableModelUrls(apiKey: string, preferredModel?: string): Promise<string[]> {
+  const urls: string[] = [];
+
+  // 1. Si el usuario definió un modelo explícito, probarlo primero
+  if (preferredModel) {
+    const clean = preferredModel.replace(/^models\//, "");
+    urls.push(`https://generativelanguage.googleapis.com/v1beta/models/${clean}:generateContent`);
+    urls.push(`https://generativelanguage.googleapis.com/v1/models/${clean}:generateContent`);
+  }
+
+  // 2. Consultar ListModels en la API de Google para descubrir los modelos activos para esta clave
+  try {
+    const listRes = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+      headers: { "x-goog-api-key": apiKey },
+    });
+    if (listRes.ok) {
+      const data = await listRes.json();
+      const models = Array.isArray(data.models) ? data.models : [];
+      const supported = models.filter((m: any) =>
+        Array.isArray(m.supportedGenerationMethods) &&
+        m.supportedGenerationMethods.includes("generateContent")
+      );
+
+      // Priorizar modelos Flash
+      const flashModels = supported.filter((m: any) => String(m.name).toLowerCase().includes("flash"));
+      const otherModels = supported.filter((m: any) => !String(m.name).toLowerCase().includes("flash"));
+
+      for (const m of [...flashModels, ...otherModels]) {
+        urls.push(`https://generativelanguage.googleapis.com/v1beta/${m.name}:generateContent`);
+      }
+    }
+  } catch {
+    // Si la llamada de introspección falla, continuamos con los fallbacks conocidos
+  }
+
+  // 3. Fallbacks estándar más comunes
+  const standardFallbacks = [
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-exp",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash-002",
+    "gemini-1.5-flash-001",
+    "gemini-1.5-flash",
+    "gemini-2.5-flash",
+    "gemini-1.5-pro",
+  ];
+
+  for (const m of standardFallbacks) {
+    urls.push(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`);
+    urls.push(`https://generativelanguage.googleapis.com/v1/models/${m}:generateContent`);
+  }
+
+  return Array.from(new Set(urls));
+}
+
 export async function extractFromPhoto(
   base64: string,
   mimeType: string
@@ -56,16 +111,13 @@ export async function extractFromPhoto(
     throw new Error("Falta configurar la variable GEMINI_API_KEY en Vercel.");
   }
 
-  const preferredModel = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
-  // Modelos a intentar en orden de preferencia
-  const modelsToTry = Array.from(new Set([preferredModel, "gemini-2.5-flash", "gemini-1.5-flash"]));
+  const preferredModel = process.env.GEMINI_MODEL?.trim();
+  const endpointUrls = await getAvailableModelUrls(apiKey, preferredModel);
 
   let lastError: Error | null = null;
 
-  for (const model of modelsToTry) {
+  for (const url of endpointUrls) {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -96,8 +148,8 @@ export async function extractFromPhoto(
 
       if (!response.ok) {
         const errText = await response.text();
-        // Si el modelo da 404, probamos el siguiente modelo
-        if (response.status === 404 && modelsToTry.indexOf(model) < modelsToTry.length - 1) {
+        // Si el modelo da 404 (no encontrado), probamos con el siguiente endpoint de la lista
+        if (response.status === 404) {
           continue;
         }
         throw new Error(`Google Gemini (${response.status}): ${errText.slice(0, 180)}`);
@@ -121,14 +173,13 @@ export async function extractFromPhoto(
       return docs.map(normalizeOcrDocument);
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      // Si fue error de parseo o fallo general con respuesta, no reintentamos
       if (lastError.message.includes("No se pudo identificar") || lastError.message.includes("Falta configurar")) {
         throw lastError;
       }
     }
   }
 
-  throw lastError || new Error("Error desconocido al procesar la imagen con Gemini.");
+  throw lastError || new Error("No se encontró ningún modelo compatible de Gemini activo en la cuenta.");
 }
 
 function normalizeOcrDocument(raw: any): OcrDocument {
