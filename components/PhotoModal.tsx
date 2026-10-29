@@ -153,8 +153,8 @@ export default function PhotoModal({
       setPhotos((prev) => [...prev, { id, url, status: "reading" }]);
 
       try {
-        // Redimensionar para fluidez y precisión de OCR (~1200px)
-        const blob = await compressImage(file, 1200);
+        // Redimensionar para fluidez y precisión de OCR (~1600px)
+        const blob = await compressImage(file, 1600);
 
         // 1. Intentar escanear QR de SAT primero (si la imagen lo trae, es 100% exacto)
         const qrContent = await scanQrFromBlob(blob);
