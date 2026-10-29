@@ -4,7 +4,6 @@ import { useRef, useState } from "react";
 import type { OcrDocument, SheetData } from "@/lib/types";
 import { api, compressImage } from "@/lib/client";
 import ItemFields, { draftFromItem, type ItemDraft } from "./ItemFields";
-import { createWorker } from "tesseract.js";
 
 type PhotoState = {
   id: string;
@@ -59,24 +58,28 @@ export default function PhotoModal({
       setPhotos((prev) => [...prev, { id, url, status: "reading" }]);
 
       try {
+        // Redimensionar y comprimir en cliente para garantizar que la subida sea inmediata (<200KB)
         const blob = await compressImage(file, 1280);
-        
-        // Ejecutar Tesseract directamente en el navegador del dispositivo
-        const worker = await createWorker("spa");
-        const ret = await worker.recognize(blob);
-        await worker.terminate();
+        const form = new FormData();
+        form.append("photo", new File([blob], "factura.jpg", { type: "image/jpeg" }));
 
-        const text = ret.data.text || "";
-        const doc = parseGuatemalaReceipt(text);
+        const result = await api<{ documents: OcrDocument[] }>("/api/ocr", {
+          method: "POST",
+          body: form,
+        });
+
+        if (!result.documents || result.documents.length === 0) {
+          throw new Error("No se detectaron datos en la factura.");
+        }
 
         setDocs((prev) => [
           ...prev,
-          {
+          ...result.documents.map((doc) => ({
             id: nextId(),
             draft: draftFromItem(doc),
             selected: true,
             confianza: doc.confianza,
-          },
+          })),
         ]);
 
         setPhotos((prev) =>
@@ -95,102 +98,6 @@ export default function PhotoModal({
 
     if (cameraRef.current) cameraRef.current.value = "";
     if (galleryRef.current) galleryRef.current.value = "";
-  }
-
-  // Motor inteligente de extracción de patrones para facturas de Guatemala
-  function parseGuatemalaReceipt(text: string): OcrDocument {
-    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    const fullText = text.toUpperCase();
-
-    // 1. NIT del emisor (usualmente acompañado de NIT o Nit Emisor)
-    let nit = "";
-    const nitMatch = fullText.match(/(?:NIT|EMISOR)[:\s]*([0-9-]{6,12})/);
-    if (nitMatch) {
-      nit = nitMatch[1].replace(/[^0-9Kk-]/g, "");
-    } else {
-      const fallbackNit = fullText.match(/\b\d{6,9}-?[0-9Kk]?\b/);
-      if (fallbackNit) nit = fallbackNit[0];
-    }
-
-    // 2. Número de Factura / DTE / Serie
-    let serie = "";
-    let numero = "";
-    const serieMatch = fullText.match(/SERIE[:\s]*([A-Z0-9-]+)/);
-    if (serieMatch) serie = serieMatch[1];
-
-    const numMatch = fullText.match(/(?:DTE|FACTURA|NUMERO|NO)[:\s#]*([0-9]{6,15})/);
-    if (numMatch) numero = numMatch[1];
-
-    // 3. Monto Total (busca la palabra TOTAL o TOT seguida de un número con decimales)
-    let valor = "";
-    const totalMatch = fullText.match(/(?:TOTAL|TOT|VALOR|SUMA)[:\s]*Q?\.?\s*([0-9]+[.,][0-9]{2})/);
-    if (totalMatch) {
-      valor = totalMatch[1].replace(",", ".");
-    } else {
-      // Buscar el número más alto en el texto como respaldo del total
-      const amounts = fullText.match(/\b[0-9]{1,4}[.,][0-9]{2}\b/g);
-      if (amounts && amounts.length > 0) {
-        const nums = amounts.map((a) => Number(a.replace(",", "."))).filter((n) => !isNaN(n));
-        if (nums.length > 0) valor = String(Math.max(...nums));
-      }
-    }
-
-    // 4. Fecha (formato YYYY-MM-DD o DD/MM/YYYY)
-    let fecha = "";
-    const dateMatch = fullText.match(/\b(20[2-3][0-9])[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12][0-9]|3[01])\b/) ||
-                      fullText.match(/\b(0[1-9]|[12][0-9]|3[01])[-/.](0[1-9]|1[0-2])[-/.](20[2-3][0-9])\b/);
-    if (dateMatch) {
-      if (dateMatch[1].length === 4) {
-        fecha = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
-      } else {
-        fecha = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
-      }
-    } else {
-      fecha = new Date().toISOString().split("T")[0];
-    }
-
-    // 5. Tipo de Gasto y Combustible
-    let tipoGasto = "Viáticos";
-    let tipoComb = "";
-    let galones = "";
-
-    if (fullText.includes("SUPER") || fullText.includes("REGULAR") || fullText.includes("DIESEL") || fullText.includes("COMBUSTIBLE") || fullText.includes("GASOLINERA")) {
-      tipoGasto = "Combustible";
-      if (fullText.includes("SUPER") || fullText.includes("SUP")) tipoComb = "S";
-      else if (fullText.includes("DIESEL") || fullText.includes("DIES")) tipoComb = "D";
-      else tipoComb = "R";
-
-      const galMatch = fullText.match(/([0-9]+[.,][0-9]{1,3})\s*(?:GAL|GLS|GALONES)/);
-      if (galMatch) galones = galMatch[1].replace(",", ".");
-    } else if (fullText.includes("HOTEL") || fullText.includes("HOSPEDAJE")) {
-      tipoGasto = "Hospedaje";
-    } else if (fullText.includes("RESTAURANTE") || fullText.includes("COMIDA") || fullText.includes("ALIMENTACION")) {
-      tipoGasto = "Viáticos";
-    }
-
-    let proveedor = lines[0] || "ESTABLECIMIENTO";
-    if (proveedor.length < 3 && lines[1]) proveedor = lines[1];
-
-    let concepto = tipoGasto === "Combustible" ? `CONSUMO DE COMBUSTIBLE` : `${tipoGasto.toUpperCase()} VARIOS`;
-
-    return {
-      proveedor: proveedor.toUpperCase(),
-      nit,
-      tipoDoc: "FAC",
-      serie,
-      numero,
-      fecha,
-      placa: "",
-      concepto,
-      tipoGasto,
-      valor,
-      galones,
-      tipoComb,
-      inguat: "",
-      pais: "GUATEMALA",
-      sitio: "",
-      confianza: "media",
-    };
   }
 
   function updateDoc(id: string, key: keyof ItemDraft, value: string) {
@@ -244,9 +151,9 @@ export default function PhotoModal({
       <div className="flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl">
         <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:rounded-t-3xl">
           <div>
-            <h2 className="text-base font-semibold">Capturar facturas (Local)</h2>
+            <h2 className="text-base font-semibold">Capturar facturas con IA</h2>
             <p className="text-xs text-slate-500">
-              Procesamiento 100% local en tu dispositivo. Sin límites ni errores.
+              Fotografía o sube facturas para extraer automáticamente sus datos.
             </p>
           </div>
           <button
@@ -321,12 +228,17 @@ export default function PhotoModal({
                     <img src={p.url} alt="Factura" className="h-full w-full object-cover" />
                     {p.status === "reading" && (
                       <div className="absolute inset-0 flex items-center justify-center bg-slate-900/60 text-[10px] font-medium text-white px-1 text-center">
-                        Procesando local...
+                        Analizando con IA...
                       </div>
                     )}
                     {p.status === "done" && (
                       <div className="absolute inset-0 flex items-center justify-center bg-emerald-900/60 text-[10px] font-medium text-white px-1 text-center">
                         Listo
+                      </div>
+                    )}
+                    {p.status === "error" && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-rose-900/80 text-[10px] font-medium text-white px-1 text-center">
+                        Error
                       </div>
                     )}
                   </div>
@@ -353,7 +265,7 @@ export default function PhotoModal({
                       Incluir en la liquidación
                     </label>
                     <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 uppercase">
-                      Procesado 100% Local
+                      Detectado con IA
                     </span>
                   </div>
 

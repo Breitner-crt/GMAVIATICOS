@@ -3,12 +3,16 @@ import { extractFromPhoto, ocrEnabled } from "@/lib/ocr";
 import { jsonError } from "@/lib/http";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export async function POST(req: Request) {
   try {
     if (!ocrEnabled()) {
       return NextResponse.json(
-        { error: "El servicio de lectura no está configurado (falta GROQ_API_KEY)." },
+        {
+          error:
+            "El servicio de lectura de facturas no está configurado (falta GEMINI_API_KEY en las variables de entorno de Vercel).",
+        },
         { status: 400 }
       );
     }

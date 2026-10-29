@@ -2,20 +2,20 @@ import type { Item, OcrDocument } from "./types";
 
 export type { OcrDocument };
 
-const PROMPT = `Analiza esta factura DTE de Guatemala y extrae los datos en formato JSON estricto con esta estructura exacta (sin markdown, sin bloques de código):
+const PROMPT = `Analiza esta imagen de factura o comprobante de gasto (especialmente facturas DTE / FEL de Guatemala) y extrae los datos en formato JSON estricto con esta estructura exacta (sin markdown, sin explicaciones):
 {
   "documentos": [
     {
-      "proveedor": "Nombre comercial del establecimiento",
-      "nit": "NIT del emisor",
+      "proveedor": "Nombre comercial del establecimiento o emisor (ej: SHELL SAN CRISTOBAL, RESTAURANTE LOS CEBOLLINES, HOTEL DEL PATIO)",
+      "nit": "NIT del emisor (sin guiones)",
       "tipoDoc": "FAC",
-      "serie": "Serie del DTE",
-      "numero": "Número del DTE",
+      "serie": "Serie del DTE o factura",
+      "numero": "Número del DTE o número de factura",
       "fecha": "YYYY-MM-DD",
       "placa": "",
-      "concepto": "Descripción breve del servicio o bien",
-      "tipoGasto": "Hospedaje",
-      "valor": 800.00,
+      "concepto": "Descripción breve del bien o servicio adquirido",
+      "tipoGasto": "Viáticos",
+      "valor": 150.00,
       "galones": 0,
       "tipoComb": "",
       "inguat": 0,
@@ -25,10 +25,23 @@ const PROMPT = `Analiza esta factura DTE de Guatemala y extrae los datos en form
     }
   ]
 }
-Reglas:
-- tipoGasto debe ser estrictamente uno de: Combustible, Viáticos, Hospedaje, Materiales, Proveedores, Comisión u Otros.
-- Extrae el NIT del emisor.
-- Extrae el total exacto pagado en valor.`;
+
+Reglas estrictas de extracción:
+1. "proveedor": Extrae el NOMBRE COMERCIAL del negocio que vendió el bien o servicio. No pongas el nombre del certificador DTE (como INFILE, MEGAPRINT, DIGIFACT, GUATEFACTURAS ni SAT).
+2. "nit": Extrae el NIT del EMISOR (el negocio que vende). NUNCA pongas el NIT del receptor / cliente ni 'CF'.
+3. "tipoGasto": Clasifica estrictamente en una de estas opciones:
+   - "Combustible" (gasolina, diesel en estaciones de servicio)
+   - "Hospedaje" (hoteles, moteles, posadas)
+   - "Viáticos" (restaurantes, cafeterías, comida, supermercado)
+   - "Materiales" (ferreterías, repuestos, suministros)
+   - "Proveedores" (servicios técnicos, honorarios)
+   - "Comisión" o "Otros"
+4. Si es "Combustible":
+   - "tipoComb": pon "S" para Superior, "R" para Regular, "D" para Diésel.
+   - "galones": cantidad exacta de galones comprados en número (ej: 8.52).
+5. "valor": Monto TOTAL EXACTO pagado con decimales (número, ej: 250.00). Si hay propina incluida en el total pagado, usa el total final pagado.
+6. "fecha": Fecha de emisión en formato YYYY-MM-DD.
+7. "tipoDoc": debe ser "FAC" (factura general), "FPC" (factura pequeño contribuyente) o "REC" (recibo).`;
 
 export function ocrEnabled(): boolean {
   return Boolean(process.env.GEMINI_API_KEY?.trim());
@@ -40,58 +53,82 @@ export async function extractFromPhoto(
 ): Promise<OcrDocument[]> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error("Falta configurar GEMINI_API_KEY en Vercel.");
+    throw new Error("Falta configurar la variable GEMINI_API_KEY en Vercel.");
   }
 
-  // Usamos la API REST directa de Gemini v1beta que acepta perfectamente cualquier clave (incluyendo las AQ...)
-  const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+  const preferredModel = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+  // Modelos a intentar en orden de preferencia
+  const modelsToTry = Array.from(new Set([preferredModel, "gemini-2.5-flash", "gemini-1.5-flash"]));
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": apiKey,
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: PROMPT },
+  let lastError: Error | null = null;
+
+  for (const model of modelsToTry) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          contents: [
             {
-              inline_data: {
-                mime_type: mimeType || "image/jpeg",
-                data: base64,
-              },
+              role: "user",
+              parts: [
+                { text: PROMPT },
+                {
+                  inline_data: {
+                    mime_type: mimeType || "image/jpeg",
+                    data: base64,
+                  },
+                },
+              ],
             },
           ],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.1,
-        response_mime_type: "application/json",
-      },
-    }),
-  });
+          generationConfig: {
+            temperature: 0.1,
+            response_mime_type: "application/json",
+          },
+        }),
+      });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Error en Google Gemini (${response.status}): ${errText.slice(0, 200)}`);
+      if (!response.ok) {
+        const errText = await response.text();
+        // Si el modelo da 404, probamos el siguiente modelo
+        if (response.status === 404 && modelsToTry.indexOf(model) < modelsToTry.length - 1) {
+          continue;
+        }
+        throw new Error(`Google Gemini (${response.status}): ${errText.slice(0, 180)}`);
+      }
+
+      const data = await response.json();
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) {
+        throw new Error("La IA no devolvió resultados para esta imagen.");
+      }
+
+      // Limpiar posibles delimitadores de código markdown por seguridad
+      const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
+
+      if (docs.length === 0) {
+        throw new Error("No se pudo identificar una factura válida en la imagen.");
+      }
+
+      return docs.map(normalizeOcrDocument);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      // Si fue error de parseo o fallo general con respuesta, no reintentamos
+      if (lastError.message.includes("No se pudo identificar") || lastError.message.includes("Falta configurar")) {
+        throw lastError;
+      }
+    }
   }
 
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) {
-    throw new Error("La IA no devolvió resultados.");
-  }
-
-  try {
-    const parsed = JSON.parse(text);
-    const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
-    return docs.map(normalizeOcrDocument);
-  } catch {
-    throw new Error("No se pudo interpretar la respuesta de la lectura.");
-  }
+  throw lastError || new Error("Error desconocido al procesar la imagen con Gemini.");
 }
 
 function normalizeOcrDocument(raw: any): OcrDocument {
@@ -103,7 +140,7 @@ function normalizeOcrDocument(raw: any): OcrDocument {
 
   return {
     proveedor: String(raw.proveedor || "").toUpperCase(),
-    nit: String(raw.nit || ""),
+    nit: String(raw.nit || "").replace(/[^0-9Kk-]/g, ""),
     tipoDoc: tipoDocVal,
     serie: String(raw.serie || ""),
     numero: String(raw.numero || ""),
