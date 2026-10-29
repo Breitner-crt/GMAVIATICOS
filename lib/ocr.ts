@@ -1,130 +1,117 @@
 import type { Item, OcrDocument } from "./types";
-import { createWorker } from "tesseract.js";
 
 export type { OcrDocument };
 
+const PROMPT = `Analiza esta factura DTE de Guatemala y extrae los datos en formato JSON estricto con esta estructura exacta (sin markdown, sin bloques de código):
+{
+  "documentos": [
+    {
+      "proveedor": "Nombre comercial del establecimiento (ej. HOTEL LA PAZ)",
+      "nit": "NIT del emisor (ej. 17629349)",
+      "tipoDoc": "FAC",
+      "serie": "Serie del DTE (ej. 58E64575)",
+      "numero": "Número del DTE (ej. 1617250229)",
+      "fecha": "YYYY-MM-DD (ej. 2026-10-03)",
+      "placa": "",
+      "concepto": "Descripción breve del servicio o bien",
+      "tipoGasto": "Hospedaje",
+      "valor": 800.00,
+      "galones": 0,
+      "tipoComb": "",
+      "inguat": 65.57,
+      "pais": "GUATEMALA",
+      "sitio": "PUERTO BARRIOS, IZABAL",
+      "confianza": "alta"
+    }
+  ]
+}
+Reglas:
+- tipoGasto debe ser estrictamente uno de: Combustible, Viáticos, Hospedaje, Materiales, Proveedores, Comisión u Otros.
+- Extrae el NIT del emisor (no el receptor).
+- Extrae el total exacto pagado en valor.`;
+
 export function ocrEnabled(): boolean {
-  // Tesseract siempre está disponible en el servidor sin requerir claves externas
-  return true;
+  return Boolean(process.env.GROQ_API_KEY?.trim());
 }
 
 export async function extractFromPhoto(
   base64: string,
   mimeType: string
 ): Promise<OcrDocument[]> {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("Falta configurar GROQ_API_KEY en Vercel.");
+  }
+
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "llama-3.2-11b-vision-preview",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: PROMPT },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:${mimeType};base64,${base64}`,
+              },
+            },
+          ],
+        },
+      ],
+      temperature: 0.1,
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Error en Groq Vision (${response.status}): ${errText.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error("La IA no devolvió resultados.");
+  }
+
   try {
-    // Inicializar Tesseract optimizado para español e inglés
-    const worker = await createWorker("spa");
-
-    // Convertir la imagen base64 a Buffer
-    const buffer = Buffer.from(base64, "base64");
-
-    const ret = await worker.recognize(buffer);
-    await worker.terminate();
-
-    const text = ret.data.text || "";
-    return [parseReceiptText(text)];
-  } catch (error) {
-    console.error("Error en Tesseract OCR:", error);
-    throw new Error("No se pudo leer el texto de la imagen con Tesseract.");
+    const parsed = JSON.parse(content);
+    const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
+    return docs.map(normalizeOcrDocument);
+  } catch {
+    throw new Error("No se pudo interpretar la respuesta de la lectura.");
   }
 }
 
-function parseReceiptText(text: string): OcrDocument {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const fullText = text.toUpperCase();
-
-  // 1. Extraer NIT (ej. NIT: 123456-7)
-  let nit = "";
-  const nitMatch = fullText.match(/NIT[:\s]*([0-9A-Z-]+)/);
-  if (nitMatch) {
-    nit = nitMatch[1].replace(/[^0-9Kk]/g, "");
-  } else {
-    const digitsOnly = fullText.match(/\b\d{6,10}-?[0-9Kk]?\b/);
-    if (digitsOnly) nit = digitsOnly[0];
-  }
-
-  // 2. Extraer Monto / Valor Total
-  let valor = "";
-  const totalMatches = fullText.match(/(?:TOTAL|TOT|VALOR|SUMA)[:\s]*Q?\.?\s*([0-9]+[.,][0-9]{2})/g);
-  if (totalMatches && totalMatches.length > 0) {
-    const lastMatch = totalMatches[totalMatches.length - 1];
-    const numMatch = lastMatch.match(/([0-9]+[.,][0-9]{2})/);
-    if (numMatch) valor = numMatch[1].replace(",", ".");
-  }
-
-  if (!valor) {
-    const amounts = fullText.match(/\b[0-9]{1,4}[.,][0-9]{2}\b/g);
-    if (amounts && amounts.length > 0) {
-      const nums = amounts.map((a) => Number(a.replace(",", "."))).filter((n) => !isNaN(n));
-      if (nums.length > 0) valor = String(Math.max(...nums));
-    }
-  }
-
-  // 3. Extraer Fecha
-  let fecha = "";
-  const dateMatch = fullText.match(/\b(20[2-3][0-9])[-/.](0[1-9]|1[0-2])[-/.](0[1-9]|[12][0-9]|3[01])\b/) ||
-                    fullText.match(/\b(0[1-9]|[12][0-9]|3[01])[-/.](0[1-9]|1[0-2])[-/.](20[2-3][0-9])\b/);
-  if (dateMatch) {
-    if (dateMatch[1].length === 4) {
-      fecha = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
-    } else {
-      fecha = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
-    }
-  } else {
-    fecha = new Date().toISOString().split("T")[0];
-  }
-
-  // 4. Extraer Placa
-  let placa = "";
-  const placaMatch = fullText.match(/\b([P|C|A|U|M]\d{3}[A-Z]{3})\b/) || fullText.match(/PLACA[:\s]*([A-Z0-9-]+)/);
-  if (placaMatch) placa = placaMatch[1];
-
-  // 5. Detectar Tipo de Gasto y Combustible
-  let tipoGasto = "Otros";
-  let tipoComb = "";
-  let galones = "";
-
-  if (fullText.includes("SUPER") || fullText.includes("REGULAR") || fullText.includes("DIESEL") || fullText.includes("COMBUSTIBLE") || fullText.includes("GASOLINERA")) {
-    tipoGasto = "Combustible";
-    if (fullText.includes("SUPER") || fullText.includes("SUP")) tipoComb = "S";
-    else if (fullText.includes("DIESEL") || fullText.includes("DIES")) tipoComb = "D";
-    else tipoComb = "R";
-
-    const galMatch = fullText.match(/([0-9]+[.,][0-9]{1,3})\s*(?:GAL|GLS|GALONES)/);
-    if (galMatch) galones = galMatch[1].replace(",", ".");
-  } else if (fullText.includes("HOTEL") || fullText.includes("HOSPEDAJE")) {
-    tipoGasto = "Hospedaje";
-  } else if (fullText.includes("RESTAURANTE") || fullText.includes("COMIDA") || fullText.includes("ALIMENTACION")) {
-    tipoGasto = "Viáticos";
-  }
-
-  let proveedor = lines[0] || "ESTABLECIMIENTO";
-  if (proveedor.length < 3 && lines[1]) proveedor = lines[1];
-
-  let concepto = tipoGasto === "Combustible" ? `CONSUMO DE COMBUSTIBLE (${tipoComb === "S" ? "SÚPER" : tipoComb === "D" ? "DIÉSEL" : "REGULAR"})` : `${tipoGasto.toUpperCase()} VARIOS`;
-
+function normalizeOcrDocument(raw: any): OcrDocument {
   return {
-    proveedor: proveedor.toUpperCase(),
-    nit: nit.replace(/[^0-9Kk-]/g, ""),
-    tipoDoc: "FAC",
-    serie: "",
-    numero: "",
-    fecha,
-    placa: placa.toUpperCase(),
-    concepto,
-    tipoGasto,
-    valor,
-    galones,
-    tipoComb,
-    inguat: "",
-    pais: "GUATEMALA",
-    sitio: "",
-    confianza: "media",
+    proveedor: String(raw.proveedor || "").toUpperCase(),
+    nit: String(raw.nit || ""),
+    tipoDoc: [\"FAC\", \"FPC\", \"REC\"].includes(raw.tipoDoc) ? raw.tipoDoc : \"FAC\",
+    serie: String(raw.serie || ""),
+    numero: String(raw.numero || ""),
+    fecha: String(raw.fecha || new Date().toISOString().split("T")[0]),
+    placa: String(raw.placa || "").toUpperCase(),
+    concepto: String(raw.concepto || "").toUpperCase(),
+    tipoGasto: String(raw.tipoGasto || "Viáticos"),
+    valor: String(raw.valor || "0"),
+    galones: String(raw.galones || ""),
+    tipoComb: [\"S\", \"R\", \"D\"].includes(raw.tipoComb) ? raw.tipoComb : "",
+    inguat: String(raw.inguat || ""),
+    pais: String(raw.pais || "GUATEMALA").toUpperCase(),
+    sitio: String(raw.sitio || "").toUpperCase(),
+    confianza: "alta",
   };
 }
 
-export function ocrToItem(doc: OcrDocument): Omit<Item, "row" | "no"> {
+export function ocrToItem(doc: OcrDocument): Omit<Item, \"row\" | \"no\"> {
   return {
     proveedor: doc.proveedor,
     nit: doc.nit,
