@@ -3,7 +3,7 @@
 import { useRef, useState, useEffect } from "react";
 import type { OcrDocument, SheetData } from "@/lib/types";
 import { api, compressImage, scanQrFromBlob } from "@/lib/client";
-import { blobToBase64, extractDirectFromGemini } from "@/lib/ocr";
+import { runLocalOcr } from "@/lib/localOcr";
 import { parseGuatemalaQr } from "@/lib/satQr";
 import ItemFields, { draftFromItem, type ItemDraft } from "./ItemFields";
 import jsQR from "jsqr";
@@ -20,7 +20,7 @@ type DocState = {
   photoUrl?: string;
   draft: ItemDraft;
   selected: boolean;
-  origen: "qr" | "ia" | "manual";
+  origen: "qr" | "ocr" | "manual";
 };
 
 type Props = {
@@ -110,7 +110,7 @@ export default function PhotoModal({
     };
   }, [liveScanner]);
 
-  function addScannedDoc(partial: Partial<OcrDocument>, origen: "qr" | "ia" | "manual", photoUrl?: string) {
+  function addScannedDoc(partial: Partial<OcrDocument>, origen: "qr" | "ocr" | "manual", photoUrl?: string) {
     const today = new Date().toISOString().split("T")[0];
     const fullDoc: OcrDocument = {
       proveedor: partial.proveedor || (origen === "qr" ? "PROVEEDOR DTE (SAT)" : "ESTABLECIMIENTO"),
@@ -128,7 +128,7 @@ export default function PhotoModal({
       inguat: partial.inguat || "",
       pais: "GUATEMALA",
       sitio: "",
-      confianza: origen === "qr" ? "alta" : origen === "ia" ? "alta" : "media",
+      confianza: origen === "qr" ? "alta" : origen === "ocr" ? "alta" : "media",
     };
 
     setDocs((prev) => [
@@ -147,25 +147,16 @@ export default function PhotoModal({
     if (!files || !files.length) return;
     setError(null);
 
-    // Obtener la API key del servidor (endpoint protegido)
-    let apiKey = "";
-    try {
-      const cfg = await api<{ apiKey: string; model: string }>("/api/ocr");
-      apiKey = cfg.apiKey ?? "";
-    } catch {
-      // Sin clave no hay OCR, pero seguimos con modo manual
-    }
-
     for (const file of Array.from(files)) {
       const id = nextId();
       const url = URL.createObjectURL(file);
       setPhotos((prev) => [...prev, { id, url, status: "reading" }]);
 
       try {
-        // Comprimir imagen para mejorar velocidad (~80 KB es suficiente para OCR)
+        // Redimensionar para fluidez y precisión de OCR (~1200px)
         const blob = await compressImage(file, 1200);
 
-        // 1. Intentar escanear QR de SAT (solo si la imagen lo trae)
+        // 1. Intentar escanear QR de SAT primero (si la imagen lo trae, es 100% exacto)
         const qrContent = await scanQrFromBlob(blob);
 
         if (qrContent) {
@@ -174,30 +165,19 @@ export default function PhotoModal({
           setPhotos((prev) =>
             prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: true } : photo))
           );
-        } else if (apiKey) {
-          // 2. Sin QR → OCR con Gemini directamente desde el navegador
-          const base64 = await blobToBase64(blob);
-          const docs = await extractDirectFromGemini(apiKey, base64, "image/jpeg");
-          for (const doc of docs) {
-            addScannedDoc(doc, "ia", url); // IA extrajo los datos
-          }
-          setPhotos((prev) =>
-            prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: false } : photo))
-          );
         } else {
-          // 3. Sin clave API → modo asistido manual con foto visible
-          addScannedDoc({}, "manual", url);
+          // 2. Sin QR: ejecutar motor OCR interno (Tesseract local + parser Guatemala)
+          const doc = await runLocalOcr(blob);
+          addScannedDoc(doc, "ocr", url);
           setPhotos((prev) =>
             prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: false } : photo))
           );
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Error desconocido";
-        setError(`Error leyendo imagen: ${msg}`);
+        // Si el motor local falla por algún motivo en la imagen, activamos modo asistido
+        addScannedDoc({}, "manual", url);
         setPhotos((prev) =>
-          prev.map((photo) =>
-            photo.id === id ? { ...photo, status: "error" } : photo
-          )
+          prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: false } : photo))
         );
       }
     }
@@ -268,9 +248,9 @@ export default function PhotoModal({
       <div className="flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl">
         <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:rounded-t-3xl">
           <div>
-            <h2 className="text-base font-semibold">Capturar facturas con IA</h2>
+            <h2 className="text-base font-semibold">Captura Rápida de Comprobantes</h2>
             <p className="text-xs text-slate-500">
-              Fotografía o sube facturas para extraer automáticamente sus datos.
+              Lectura automática local (QR SAT o motor OCR interno) sin depender de servidores externos.
             </p>
           </div>
           <button
@@ -362,13 +342,13 @@ export default function PhotoModal({
             onChange={(e) => handleFiles(e.target.files)}
           />
 
-          {/* Lista de gastos detectados o por completar */}
+          {/* Indicador de lectura */}
           {photos.some((p) => p.status === "reading") && (
             <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
               <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round"/>
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
               </svg>
-              Analizando con IA…
+              Extrayendo datos de la factura con motor local…
             </div>
           )}
           {/* Lista de gastos detectados o por completar */}
@@ -393,9 +373,9 @@ export default function PhotoModal({
                       <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 uppercase tracking-wide">
                         ✓ Factura SAT (QR Oficial)
                       </span>
-                    ) : doc.origen === "ia" ? (
+                    ) : doc.origen === "ocr" ? (
                       <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[10px] font-bold text-blue-800 uppercase tracking-wide">
-                        ✦ Leído con IA
+                        ✓ Datos extraídos con OCR
                       </span>
                     ) : (
                       <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold text-slate-600 uppercase">
@@ -435,11 +415,10 @@ export default function PhotoModal({
                           key={cat.val}
                           type="button"
                           onClick={() => setQuickCategory(doc.id, cat.val)}
-                          className={`rounded-xl py-1.5 text-[11px] font-semibold transition ${
-                            doc.draft.tipoGasto === cat.val
+                          className={`rounded-xl py-1.5 text-[11px] font-semibold transition ${doc.draft.tipoGasto === cat.val
                               ? "bg-emerald-600 text-white shadow-sm"
                               : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                          }`}
+                            }`}
                         >
                           {cat.label}
                         </button>
