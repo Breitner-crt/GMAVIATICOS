@@ -58,8 +58,8 @@ export default function PhotoModal({
       setPhotos((prev) => [...prev, { id, url, status: "reading" }]);
 
       try {
-        // Redimensionar y comprimir en cliente para garantizar que la subida sea inmediata (<200KB)
-        const blob = await compressImage(file, 1280);
+        // Redimensionar y comprimir en cliente para garantizar que la subida sea inmediata (<100KB)
+        const blob = await compressImage(file, 1080);
         const form = new FormData();
         form.append("photo", new File([blob], "factura.jpg", { type: "image/jpeg" }));
 

@@ -47,59 +47,40 @@ export function ocrEnabled(): boolean {
   return Boolean(process.env.GEMINI_API_KEY?.trim());
 }
 
-async function getAvailableModelUrls(apiKey: string, preferredModel?: string): Promise<string[]> {
-  const urls: string[] = [];
+// Caché en memoria para no repetir búsquedas en llamadas subsecuentes (velocidad < 2s)
+let cachedWorkingModelUrl: string | null = null;
 
-  // 1. Si el usuario definió un modelo explícito, probarlo primero
+async function buildEndpointCandidates(apiKey: string, preferredModel?: string): Promise<string[]> {
+  const candidates: string[] = [];
+
+  // 1. Si ya descubrimos un modelo que responde 200 OK, va de primer lugar absoluto (0 ms de overhead)
+  if (cachedWorkingModelUrl) {
+    candidates.push(cachedWorkingModelUrl);
+  }
+
+  // 2. Modelo explícito en variable de entorno si se especificó
   if (preferredModel) {
     const clean = preferredModel.replace(/^models\//, "");
-    urls.push(`https://generativelanguage.googleapis.com/v1beta/models/${clean}:generateContent`);
-    urls.push(`https://generativelanguage.googleapis.com/v1/models/${clean}:generateContent`);
+    candidates.push(`https://generativelanguage.googleapis.com/v1beta/models/${clean}:generateContent`);
+    candidates.push(`https://generativelanguage.googleapis.com/v1/models/${clean}:generateContent`);
   }
 
-  // 2. Consultar ListModels en la API de Google para descubrir los modelos activos para esta clave
-  try {
-    const listRes = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
-      headers: { "x-goog-api-key": apiKey },
-    });
-    if (listRes.ok) {
-      const data = await listRes.json();
-      const models = Array.isArray(data.models) ? data.models : [];
-      const supported = models.filter((m: any) =>
-        Array.isArray(m.supportedGenerationMethods) &&
-        m.supportedGenerationMethods.includes("generateContent")
-      );
-
-      // Priorizar modelos Flash
-      const flashModels = supported.filter((m: any) => String(m.name).toLowerCase().includes("flash"));
-      const otherModels = supported.filter((m: any) => !String(m.name).toLowerCase().includes("flash"));
-
-      for (const m of [...flashModels, ...otherModels]) {
-        urls.push(`https://generativelanguage.googleapis.com/v1beta/${m.name}:generateContent`);
-      }
-    }
-  } catch {
-    // Si la llamada de introspección falla, continuamos con los fallbacks conocidos
-  }
-
-  // 3. Fallbacks estándar más comunes
-  const standardFallbacks = [
+  // 3. Modelos Flash más rápidos de Google (en orden de velocidad de respuesta)
+  const priorityFlashModels = [
     "gemini-2.0-flash",
-    "gemini-2.0-flash-exp",
     "gemini-1.5-flash-latest",
     "gemini-1.5-flash-002",
     "gemini-1.5-flash-001",
     "gemini-1.5-flash",
     "gemini-2.5-flash",
-    "gemini-1.5-pro",
   ];
 
-  for (const m of standardFallbacks) {
-    urls.push(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`);
-    urls.push(`https://generativelanguage.googleapis.com/v1/models/${m}:generateContent`);
+  for (const m of priorityFlashModels) {
+    candidates.push(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`);
+    candidates.push(`https://generativelanguage.googleapis.com/v1/models/${m}:generateContent`);
   }
 
-  return Array.from(new Set(urls));
+  return Array.from(new Set(candidates));
 }
 
 export async function extractFromPhoto(
@@ -112,7 +93,7 @@ export async function extractFromPhoto(
   }
 
   const preferredModel = process.env.GEMINI_MODEL?.trim();
-  const endpointUrls = await getAvailableModelUrls(apiKey, preferredModel);
+  const endpointUrls = await buildEndpointCandidates(apiKey, preferredModel);
 
   let lastError: Error | null = null;
 
@@ -141,6 +122,7 @@ export async function extractFromPhoto(
           ],
           generationConfig: {
             temperature: 0.1,
+            maxOutputTokens: 800,
             response_mime_type: "application/json",
           },
         }),
@@ -148,8 +130,12 @@ export async function extractFromPhoto(
 
       if (!response.ok) {
         const errText = await response.text();
-        // Si el modelo da 404 (no encontrado), probamos con el siguiente endpoint de la lista
+        // Si el modelo da 404 (no soportado en esta versión), probamos el siguiente
         if (response.status === 404) {
+          // Si el que falló era el que estaba en caché, lo limpiamos para reevaluar
+          if (cachedWorkingModelUrl === url) {
+            cachedWorkingModelUrl = null;
+          }
           continue;
         }
         throw new Error(`Google Gemini (${response.status}): ${errText.slice(0, 180)}`);
@@ -161,7 +147,10 @@ export async function extractFromPhoto(
         throw new Error("La IA no devolvió resultados para esta imagen.");
       }
 
-      // Limpiar posibles delimitadores de código markdown por seguridad
+      // Guardamos la URL exitosa en caché para que las próximas facturas vayan directo a ella en < 2 segundos
+      cachedWorkingModelUrl = url;
+
+      // Limpiar delimitadores markdown si vinieran
       const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleaned);
       const docs = Array.isArray(parsed.documentos) ? parsed.documentos : [];
@@ -177,6 +166,29 @@ export async function extractFromPhoto(
         throw lastError;
       }
     }
+  }
+
+  // Si todas las opciones de la lista rápida dieron 404, como último recurso introspeccionamos ListModels
+  try {
+    const listRes = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+      headers: { "x-goog-api-key": apiKey },
+    });
+    if (listRes.ok) {
+      const data = await listRes.json();
+      const models = Array.isArray(data.models) ? data.models : [];
+      const flash = models.find((m: any) =>
+        String(m.name).toLowerCase().includes("flash") &&
+        Array.isArray(m.supportedGenerationMethods) &&
+        m.supportedGenerationMethods.includes("generateContent")
+      );
+      if (flash) {
+        const discoveredUrl = `https://generativelanguage.googleapis.com/v1beta/${flash.name}:generateContent`;
+        cachedWorkingModelUrl = discoveredUrl;
+        return extractFromPhoto(base64, mimeType);
+      }
+    }
+  } catch {
+    // ignorar
   }
 
   throw lastError || new Error("No se encontró ningún modelo compatible de Gemini activo en la cuenta.");

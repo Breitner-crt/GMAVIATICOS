@@ -18,28 +18,70 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-export async function compressImage(file: File, maxSide = 1600): Promise<Blob> {
+export async function compressImage(file: File, maxSide = 1080): Promise<Blob> {
+  // 1. Intento rápido con createImageBitmap
   try {
-    const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
-    const width = Math.round(bitmap.width * scale);
-    const height = Math.round(bitmap.height * scale);
+    if (typeof createImageBitmap === "function") {
+      const bitmap = await createImageBitmap(file);
+      const origW = bitmap.width;
+      const origH = bitmap.height;
+      const scale = Math.min(1, maxSide / Math.max(origW, origH));
+      const width = Math.round(origW * scale);
+      const height = Math.round(origH * scale);
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (context) {
+        context.drawImage(bitmap, 0, 0, width, height);
+        bitmap.close?.();
+
+        const blob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob(resolve, "image/jpeg", 0.75)
+        );
+        if (blob) return blob;
+      }
+    }
+  } catch {
+    /* Si falla createImageBitmap (ej. ciertas versiones de iOS), continuamos al fallback */
+  }
+
+  // 2. Fallback universal usando elemento Image (compatible con cualquier navegador móvil)
+  try {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = reject;
+      img.src = objectUrl;
+    });
+
+    const origW = img.naturalWidth || img.width;
+    const origH = img.naturalHeight || img.height;
+    const scale = Math.min(1, maxSide / Math.max(origW, origH));
+    const width = Math.round(origW * scale);
+    const height = Math.round(origH * scale);
 
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) return file;
-    context.drawImage(bitmap, 0, 0, width, height);
-    bitmap.close?.();
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.drawImage(img, 0, 0, width, height);
+      URL.revokeObjectURL(objectUrl);
 
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", 0.85)
-    );
-    return blob ?? file;
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, "image/jpeg", 0.75)
+      );
+      if (blob) return blob;
+    }
+    URL.revokeObjectURL(objectUrl);
   } catch {
-    return file;
+    /* si todo falla, devolver el archivo original */
   }
+
+  return file;
 }
 
 export function money(value: string | number | null | undefined): string {
