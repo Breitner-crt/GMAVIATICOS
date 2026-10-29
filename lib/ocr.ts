@@ -42,7 +42,7 @@ export async function extractFromPhoto(
     throw new Error("Falta configurar GROQ_API_KEY en Vercel.");
   }
 
-  // Usamos Llama 3.2 90B Vision, un modelo ultrarrápido y con excelente cuota gratuita
+  // Usamos estrictamente el modelo activo y estable de Groq Vision
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
