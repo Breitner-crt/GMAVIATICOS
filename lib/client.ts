@@ -1,3 +1,5 @@
+import jsQR from "jsqr";
+
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   let payload: unknown = null;
@@ -44,10 +46,10 @@ export async function compressImage(file: File, maxSide = 1080): Promise<Blob> {
       }
     }
   } catch {
-    /* Si falla createImageBitmap (ej. ciertas versiones de iOS), continuamos al fallback */
+    /* Si falla createImageBitmap, continuamos al fallback */
   }
 
-  // 2. Fallback universal usando elemento Image (compatible con cualquier navegador móvil)
+  // 2. Fallback universal usando elemento Image
   try {
     const objectUrl = URL.createObjectURL(file);
     const img = new Image();
@@ -82,6 +84,45 @@ export async function compressImage(file: File, maxSide = 1080): Promise<Blob> {
   }
 
   return file;
+}
+
+/** Escanea si una foto contiene un código QR de SAT / FEL en milisegundos sin internet */
+export async function scanQrFromBlob(fileOrBlob: Blob): Promise<string | null> {
+  try {
+    const objectUrl = URL.createObjectURL(fileOrBlob);
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = reject;
+      img.src = objectUrl;
+    });
+
+    const maxSide = 1200;
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height));
+    const width = Math.round((img.naturalWidth || img.width) * scale);
+    const height = Math.round((img.naturalHeight || img.height) * scale);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) {
+      URL.revokeObjectURL(objectUrl);
+      return null;
+    }
+
+    ctx.drawImage(img, 0, 0, width, height);
+    URL.revokeObjectURL(objectUrl);
+
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const code = jsQR(imageData.data, width, height, {
+      inversionAttempts: "attemptBoth",
+    });
+
+    return code ? code.data : null;
+  } catch {
+    return null;
+  }
 }
 
 export function money(value: string | number | null | undefined): string {
