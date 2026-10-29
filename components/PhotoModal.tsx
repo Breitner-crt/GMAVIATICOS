@@ -45,6 +45,7 @@ export default function PhotoModal({
   const [docs, setDocs] = useState<DocState[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [debugText, setDebugText] = useState<string | null>(null); // Panel debug
   const [liveScanner, setLiveScanner] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -165,7 +166,8 @@ export default function PhotoModal({
           );
         } else {
           // 2. Si no tiene QR, usar el motor OCR local con Tesseract
-          const doc = await runLocalOcr(blob);
+          const { text, doc } = await runLocalOcr(blob);
+          setDebugText(text);
           addScannedDoc(doc, "ocr", url);
           setPhotos((prev) =>
             prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: false } : photo))
@@ -411,6 +413,14 @@ export default function PhotoModal({
                       ))}
                     </div>
                   </div>
+
+                  {/* Debug de texto detectado */}
+                  {debugText && (
+                    <div className="rounded-xl bg-slate-900 p-3 text-[10px] text-emerald-400 font-mono overflow-auto max-h-24">
+                      <p className="text-slate-500 mb-1 underline">Texto OCR detectado:</p>
+                      {debugText}
+                    </div>
+                  )}
 
                   <ItemFields value={doc.draft} onChange={(k, v) => updateDoc(doc.id, k, v)} />
                 </div>
