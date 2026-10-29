@@ -92,7 +92,6 @@ export default function PhotoModal({
         const code = jsQR(imgData.data, canvas.width, canvas.height);
 
         if (code && code.data) {
-          // QR Detectado en vivo
           const parsed = parseGuatemalaQr(code.data);
           addScannedDoc(parsed, "qr");
           setLiveScanner(false);
@@ -113,7 +112,7 @@ export default function PhotoModal({
   function addScannedDoc(partial: Partial<OcrDocument>, origen: "qr" | "ocr" | "manual", photoUrl?: string) {
     const today = new Date().toISOString().split("T")[0];
     const fullDoc: OcrDocument = {
-      proveedor: partial.proveedor || (origen === "qr" ? "PROVEEDOR DTE (SAT)" : "ESTABLECIMIENTO"),
+      proveedor: partial.proveedor || (origen === "qr" ? "FACTURA DTE (SAT)" : "ESTABLECIMIENTO"),
       nit: partial.nit || "",
       tipoDoc: partial.tipoDoc || "FAC",
       serie: partial.serie || "",
@@ -128,7 +127,7 @@ export default function PhotoModal({
       inguat: partial.inguat || "",
       pais: "GUATEMALA",
       sitio: "",
-      confianza: origen === "qr" ? "alta" : origen === "ocr" ? "alta" : "media",
+      confianza: origen === "qr" ? "alta" : origen === "ocr" ? "media" : "baja",
     };
 
     setDocs((prev) => [
@@ -153,11 +152,10 @@ export default function PhotoModal({
       setPhotos((prev) => [...prev, { id, url, status: "reading" }]);
 
       try {
-        // Redimensionar para fluidez y precisión de OCR (~1600px)
         const blob = await compressImage(file, 1600);
 
-        // 1. Intentar escanear QR de SAT primero (si la imagen lo trae, es 100% exacto)
-        const qrContent = await scanQrFromBlob(blob);
+        // 1. Búsqueda ultra-agresiva de QR en la foto (incluyendo esquinas y reescalado)
+        let qrContent = await scanQrFromBlob(blob);
 
         if (qrContent) {
           const parsed = parseGuatemalaQr(qrContent);
@@ -166,7 +164,7 @@ export default function PhotoModal({
             prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: true } : photo))
           );
         } else {
-          // 2. Sin QR: ejecutar motor OCR interno (Tesseract local + parser Guatemala)
+          // 2. Si no tiene QR, usar el motor OCR local con Tesseract
           const doc = await runLocalOcr(blob);
           addScannedDoc(doc, "ocr", url);
           setPhotos((prev) =>
@@ -174,7 +172,7 @@ export default function PhotoModal({
           );
         }
       } catch (err) {
-        // Si el motor local falla por algún motivo en la imagen, activamos modo asistido
+        // Fallback a modo manual asistido si ocurre cualquier error
         addScannedDoc({}, "manual", url);
         setPhotos((prev) =>
           prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: false } : photo))
@@ -248,9 +246,9 @@ export default function PhotoModal({
       <div className="flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl">
         <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:rounded-t-3xl">
           <div>
-            <h2 className="text-base font-semibold">Captura Rápida de Comprobantes</h2>
+            <h2 className="text-base font-semibold">Capturar Comprobante o Factura</h2>
             <p className="text-xs text-slate-500">
-              Lectura automática local (QR SAT o motor OCR interno) sin depender de servidores externos.
+              Detección automática por QR (SAT) o lectura OCR local.
             </p>
           </div>
           <button
@@ -272,7 +270,7 @@ export default function PhotoModal({
             </div>
           )}
 
-          {/* Escáner en vivo de QR */}
+          {/* Escáner en vivo con cámara */}
           {liveScanner ? (
             <div className="relative overflow-hidden rounded-2xl bg-black aspect-video flex flex-col items-center justify-center">
               <video ref={videoRef} playsInline className="h-full w-full object-cover" />
@@ -342,20 +340,19 @@ export default function PhotoModal({
             onChange={(e) => handleFiles(e.target.files)}
           />
 
-          {/* Indicador de lectura */}
           {photos.some((p) => p.status === "reading") && (
             <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
               <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
               </svg>
-              Extrayendo datos de la factura con motor local…
+              Escaneando código QR o procesando factura...
             </div>
           )}
-          {/* Lista de gastos detectados o por completar */}
+
           {docs.length > 0 && (
             <div className="space-y-4">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Gastos listos para liquidar ({docs.length})
+                Gastos detectados ({docs.length})
               </h3>
               {docs.map((doc) => (
                 <div key={doc.id} className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4 shadow-sm">
@@ -371,37 +368,26 @@ export default function PhotoModal({
                     </label>
                     {doc.origen === "qr" ? (
                       <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 uppercase tracking-wide">
-                        ✓ Factura SAT (QR Oficial)
-                      </span>
-                    ) : doc.origen === "ocr" ? (
-                      <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[10px] font-bold text-blue-800 uppercase tracking-wide">
-                        ✓ Datos extraídos con OCR
+                        ✓ Datos por QR (100% Exacto)
                       </span>
                     ) : (
-                      <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-semibold text-slate-600 uppercase">
-                        Foto de comprobante
+                      <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-bold text-amber-800 uppercase tracking-wide">
+                        ⚠️ OCR Local (Verificar datos)
                       </span>
                     )}
                   </div>
 
-                  {/* Foto de comprobante con zoom asistido */}
                   {doc.photoUrl && (
-                    <div className="space-y-2">
-                      <div className="relative max-h-48 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
-                        <img
-                          src={doc.photoUrl}
-                          alt="Comprobante"
-                          className="h-full w-full object-contain cursor-zoom-in"
-                          onClick={() => window.open(doc.photoUrl, "_blank")}
-                        />
-                      </div>
-                      <p className="text-[10px] text-slate-400 text-center">
-                        (Toca la imagen para verla en pantalla completa)
-                      </p>
+                    <div className="relative max-h-40 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+                      <img
+                        src={doc.photoUrl}
+                        alt="Factura"
+                        className="h-full w-full object-contain cursor-zoom-in"
+                        onClick={() => window.open(doc.photoUrl, "_blank")}
+                      />
                     </div>
                   )}
 
-                  {/* Botones de Categoría Rápida */}
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-semibold text-slate-600">Categoría rápida:</label>
                     <div className="grid grid-cols-4 gap-1.5">
@@ -426,7 +412,6 @@ export default function PhotoModal({
                     </div>
                   </div>
 
-                  {/* Campos editables */}
                   <ItemFields value={doc.draft} onChange={(k, v) => updateDoc(doc.id, k, v)} />
                 </div>
               ))}
