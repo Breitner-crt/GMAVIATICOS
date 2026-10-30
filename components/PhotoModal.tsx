@@ -7,13 +7,6 @@ import { parseGuatemalaQr } from "@/lib/satQr";
 import ItemFields, { draftFromItem, type ItemDraft } from "./ItemFields";
 import jsQR from "jsqr";
 
-type PhotoState = {
-  id: string;
-  url: string;
-  status: "reading" | "done" | "error";
-  hasQr?: boolean;
-};
-
 type DocState = {
   id: string;
   photoUrl?: string;
@@ -40,13 +33,11 @@ export default function PhotoModal({
   onSaved,
   onManual,
 }: Props) {
-  const [photos, setPhotos] = useState<PhotoState[]>([]);
   const [docs, setDocs] = useState<DocState[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveScanner, setLiveScanner] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
-
   const cameraRef = useRef<HTMLInputElement>(null);
 
   const selected = docs.filter((doc) => doc.selected);
@@ -144,32 +135,9 @@ export default function PhotoModal({
     setError(null);
 
     for (const file of Array.from(files)) {
-      const id = nextId();
       const url = URL.createObjectURL(file);
-      setPhotos((prev) => [...prev, { id, url, status: "reading" }]);
-
-      try {
-        const blob = await compressImage(file, 1600);
-        let qrContent = await scanQrFromBlob(blob);
-
-        if (qrContent) {
-          const parsed = parseGuatemalaQr(qrContent);
-          addScannedDoc(parsed, "qr", url);
-          setPhotos((prev) =>
-            prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: true } : photo))
-          );
-        } else {
-          addScannedDoc({}, "manual", url);
-          setPhotos((prev) =>
-            prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: false } : photo))
-          );
-        }
-      } catch (err) {
-        addScannedDoc({}, "manual", url);
-        setPhotos((prev) =>
-          prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: false } : photo))
-        );
-      }
+      // Al tomar foto manual, simplemente adjuntamos la imagen y abrimos el formulario limpio
+      addScannedDoc({}, "manual", url);
     }
 
     if (cameraRef.current) cameraRef.current.value = "";
@@ -189,17 +157,6 @@ export default function PhotoModal({
     );
   }
 
-  function setQuickCategory(id: string, cat: string) {
-    updateDoc(id, "tipoGasto", cat);
-    if (cat === "Combustible") {
-      updateDoc(id, "concepto", "CONSUMO DE COMBUSTIBLE");
-    } else if (cat === "Hospedaje") {
-      updateDoc(id, "concepto", "HOSPEDAJE");
-    } else {
-      updateDoc(id, "concepto", "ALIMENTACIÓN / VIÁTICOS");
-    }
-  }
-
   async function save() {
     if (!selected.length) {
       setError("Selecciona al menos un gasto para registrar.");
@@ -212,18 +169,15 @@ export default function PhotoModal({
 
     setBusy(true);
     setError(null);
-    let latest: SheetData | null = null;
 
     try {
       for (const doc of selected) {
-        latest = await api<SheetData>("/api/items", {
+        await api<SheetData>("/api/items", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ item: doc.draft }),
+          body: JSON.stringify({ item: doc.draft, photoUrl: doc.photoUrl }),
         });
-        setDocs((prev) => prev.filter((item) => item.id !== doc.id));
       }
-      if (latest) onSaved(latest);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo guardar.");
@@ -239,7 +193,7 @@ export default function PhotoModal({
           <div>
             <h2 className="text-base font-semibold">Agregar Gasto</h2>
             <p className="text-xs text-slate-500">
-              Detección por QR (SAT) o llenado manual.
+              Usa QR para autocompletar o toma una foto para llenar manualmente.
             </p>
           </div>
           <button
@@ -263,15 +217,12 @@ export default function PhotoModal({
           {liveScanner ? (
             <div className="relative overflow-hidden rounded-2xl bg-black aspect-video flex flex-col items-center justify-center">
               <video ref={videoRef} playsInline className="h-full w-full object-cover" />
-              <div className="absolute inset-0 border-2 border-emerald-400/80 rounded-2xl pointer-events-none flex items-center justify-center">
-                <div className="w-48 h-48 border-2 border-dashed border-white/80 rounded-xl" />
-              </div>
               <button
                 type="button"
                 onClick={() => setLiveScanner(false)}
                 className="absolute bottom-3 rounded-full bg-slate-900/80 px-4 py-1.5 text-xs font-semibold text-white backdrop-blur-sm"
               >
-                Cancelar escáner
+                Cancelar
               </button>
             </div>
           ) : (
@@ -281,11 +232,7 @@ export default function PhotoModal({
                 onClick={() => cameraRef.current?.click()}
                 className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-4 text-center hover:border-emerald-500 hover:bg-emerald-50/50"
               >
-                <svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                <span className="text-xs font-semibold text-slate-700">Tomar foto</span>
+                <span className="text-xs font-semibold text-slate-700">📸 Tomar Foto</span>
               </button>
 
               <button
@@ -293,10 +240,7 @@ export default function PhotoModal({
                 onClick={() => setLiveScanner(true)}
                 className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-4 text-center hover:border-emerald-500 hover:bg-emerald-50/50"
               >
-                <svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
-                </svg>
-                <span className="text-xs font-semibold text-slate-700">Escanear QR</span>
+                <span className="text-xs font-semibold text-slate-700">📱 Escanear QR</span>
               </button>
             </div>
           )}
@@ -310,78 +254,15 @@ export default function PhotoModal({
             onChange={(e) => handleFiles(e.target.files)}
           />
 
-          {photos.some((p) => p.status === "reading") && (
-            <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-              <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
-              </svg>
-              Buscando código QR...
-            </div>
-          )}
-
           {docs.length > 0 && (
             <div className="space-y-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Gastos detectados ({docs.length})
-              </h3>
               {docs.map((doc) => (
                 <div key={doc.id} className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4 shadow-sm">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={doc.selected}
-                        onChange={() => toggleDoc(doc.id)}
-                        className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                      />
-                      Incluir en la liquidación
-                    </label>
-                    {doc.origen === "qr" ? (
-                      <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 uppercase tracking-wide">
-                        ✓ Datos por QR (Exacto)
-                      </span>
-                    ) : (
-                      <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-bold text-slate-800 uppercase tracking-wide">
-                        📝 Llenado Manual
-                      </span>
-                    )}
-                  </div>
-
                   {doc.photoUrl && (
                     <div className="relative max-h-40 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
-                      <img
-                        src={doc.photoUrl}
-                        alt="Factura"
-                        className="h-full w-full object-contain cursor-zoom-in"
-                        onClick={() => window.open(doc.photoUrl, "_blank")}
-                      />
+                      <img src={doc.photoUrl} alt="Factura" className="h-full w-full object-contain" />
                     </div>
                   )}
-
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-semibold text-slate-600">Categoría rápida:</label>
-                    <div className="grid grid-cols-4 gap-1.5">
-                      {[
-                        { label: "⛽ Gasolina", val: "Combustible" },
-                        { label: "🍽️ Viáticos", val: "Viáticos" },
-                        { label: "🏨 Hotel", val: "Hospedaje" },
-                        { label: "📦 Otros", val: "Otros" },
-                      ].map((cat) => (
-                        <button
-                          key={cat.val}
-                          type="button"
-                          onClick={() => setQuickCategory(doc.id, cat.val)}
-                          className={`rounded-xl py-1.5 text-[11px] font-semibold transition ${doc.draft.tipoGasto === cat.val
-                            ? "bg-emerald-600 text-white shadow-sm"
-                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                          }`}
-                        >
-                          {cat.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
                   <ItemFields value={doc.draft} onChange={(k, v) => updateDoc(doc.id, k, v)} />
                 </div>
               ))}
@@ -392,18 +273,11 @@ export default function PhotoModal({
         <footer className="flex items-center justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:rounded-b-3xl">
           <button
             type="button"
-            onClick={onManual}
-            className="rounded-xl px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100"
-          >
-            Agregar a mano
-          </button>
-          <button
-            type="button"
             disabled={!selected.length || busy}
             onClick={save}
             className="rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:opacity-50"
           >
-            {busy ? "Guardando..." : `Guardar ${selected.length} gasto(s)`}
+            {busy ? "Guardando..." : "Guardar en Drive y Sheets"}
           </button>
         </footer>
       </div>
