@@ -38,15 +38,16 @@ export default function PhotoModal({
   const [error, setError] = useState<string | null>(null);
   const [liveScanner, setLiveScanner] = useState(false);
   
-  // States para el modal de foto individual
-  const [photoModalOpen, setPhotoModalOpen] = useState(false);
-  const [currentPhoto, setCurrentPhoto] = useState<{url: string, id: string} | null>(null);
+  // Estado para el modal exclusivo de revisión de foto
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [currentPhoto, setCurrentPhoto] = useState<{url: string, file: File} | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
 
   const selected = docs.filter((doc) => doc.selected);
 
+  // Escáner QR en vivo
   useEffect(() => {
     if (!liveScanner) return;
     let stream: MediaStream | null = null;
@@ -63,7 +64,7 @@ export default function PhotoModal({
           requestAnimationFrame(scanVideoFrame);
         }
       } catch (err) {
-        setError("No se pudo acceder a la cámara para el escaneo del QR.");
+        setError("No se pudo acceder a la cámara.");
         setLiveScanner(false);
       }
     }
@@ -73,17 +74,15 @@ export default function PhotoModal({
         animId = requestAnimationFrame(scanVideoFrame);
         return;
       }
-
       const video = videoRef.current;
       const canvas = document.createElement("canvas");
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const ctx = canvas.getContext("2d");
       if (ctx) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const code = jsQR(imgData.data, canvas.width, canvas.height);
-
         if (code && code.data) {
           const parsed = parseGuatemalaQr(code.data);
           addScannedDoc(parsed, "qr");
@@ -93,9 +92,7 @@ export default function PhotoModal({
       }
       animId = requestAnimationFrame(scanVideoFrame);
     }
-
     startCamera();
-
     return () => {
       cancelAnimationFrame(animId);
       if (stream) stream.getTracks().forEach((t) => t.stop());
@@ -139,28 +136,22 @@ export default function PhotoModal({
     if (!files || !files.length) return;
     const file = files[0];
     const url = URL.createObjectURL(file);
-    setCurrentPhoto({ url, id: nextId() });
-    setPhotoModalOpen(true);
+    // Abrimos el modal exclusivo para la foto, sin mostrar el formulario aún
+    setCurrentPhoto({ url, file });
+    setReviewModalOpen(true);
     if (cameraRef.current) cameraRef.current.value = "";
   }
 
-  function savePhotoManual() {
+  // Al confirmar en el modal de la foto, se agrega a la lista de "docs" y se cierra el modal de revisión
+  function confirmPhoto() {
     if (currentPhoto) {
       addScannedDoc({}, "manual", currentPhoto.url);
-      setPhotoModalOpen(false);
+      setReviewModalOpen(false);
       setCurrentPhoto(null);
     }
   }
 
-  function updateDoc(id: string, key: keyof ItemDraft, value: string) {
-    setDocs((prev) =>
-      prev.map((doc) =>
-        doc.id === id ? { ...doc, draft: { ...doc.draft, [key]: value } } : doc
-      )
-    );
-  }
-
-  async function save() {
+  async function saveAll() {
     setBusy(true);
     try {
       for (const doc of selected) {
@@ -172,7 +163,7 @@ export default function PhotoModal({
       }
       onClose();
     } catch (err) {
-      setError("No se pudo guardar.");
+      setError("Error al guardar.");
     } finally {
       setBusy(false);
     }
@@ -180,55 +171,92 @@ export default function PhotoModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 backdrop-blur-sm sm:items-center sm:p-6">
-      {/* MODAL DE LLENADO MANUAL POST-FOTO */}
-      {photoModalOpen && currentPhoto && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white w-full max-w-lg rounded-3xl p-6 shadow-2xl">
-            <h3 className="text-lg font-bold mb-4">Llenar datos de factura</h3>
-            <img src={currentPhoto.url} className="w-full h-48 object-contain mb-4 rounded-xl bg-slate-100" />
-            <ItemFields value={draftFromItem({} as any)} onChange={(k, v) => {}} />
-            <button onClick={savePhotoManual} className="w-full mt-4 bg-emerald-600 text-white py-3 rounded-xl font-bold">
-              Guardar datos
-            </button>
+      
+      {/* MODAL EXCLUSIVO PARA LA FOTO (REVISIÓN) */}
+      {reviewModalOpen && currentPhoto && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black p-4 sm:p-10">
+          <div className="relative w-full max-w-2xl h-full flex flex-col items-center justify-center space-y-6">
+            <h3 className="text-white text-xl font-bold">Revisar Fotografía</h3>
+            <div className="flex-1 w-full overflow-hidden rounded-2xl bg-slate-800 flex items-center justify-center">
+              <img src={currentPhoto.url} className="max-h-full max-w-full object-contain" alt="Vista previa" />
+            </div>
+            <div className="flex w-full gap-4">
+              <button 
+                onClick={() => { setReviewModalOpen(false); setCurrentPhoto(null); }} 
+                className="flex-1 bg-white/10 text-white py-4 rounded-2xl font-semibold border border-white/20"
+              >
+                Descartar
+              </button>
+              <button 
+                onClick={confirmPhoto} 
+                className="flex-1 bg-emerald-500 text-white py-4 rounded-2xl font-bold shadow-lg shadow-emerald-500/30"
+              >
+                Aceptar Foto
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      <div className="flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl">
+      <div className="flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl shadow-2xl">
         <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:rounded-t-3xl">
-          <h2 className="text-base font-semibold">Captura de Gastos</h2>
-          <button type="button" onClick={onClose} className="p-2 text-slate-500">✕</button>
+          <div>
+            <h2 className="text-base font-semibold">Captura de Gastos</h2>
+            <p className="text-xs text-slate-500">Selecciona el método de captura</p>
+          </div>
+          <button type="button" onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600">✕</button>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+        <div className="flex-1 overflow-y-auto p-5 space-y-6">
+          {error && <div className="rounded-xl bg-rose-50 p-3 text-xs text-rose-700">{error}</div>}
+
           {liveScanner ? (
-            <div className="relative rounded-2xl bg-black aspect-video flex flex-col items-center justify-center">
+            <div className="relative rounded-2xl bg-black aspect-video flex flex-col items-center justify-center overflow-hidden">
               <video ref={videoRef} playsInline className="h-full w-full object-cover" />
-              <button onClick={() => setLiveScanner(false)} className="absolute bottom-3 bg-white/20 px-4 py-1 rounded-full text-white text-xs">Cancelar</button>
+              <button onClick={() => setLiveScanner(false)} className="absolute bottom-4 bg-white/20 backdrop-blur-md px-6 py-2 rounded-full text-white text-xs font-bold">Cerrar Escáner</button>
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => cameraRef.current?.click()} className="p-4 border-2 border-dashed rounded-2xl text-center text-xs font-semibold">📸 Tomar Foto</button>
-              <button onClick={() => setLiveScanner(true)} className="p-4 border-2 border-dashed rounded-2xl text-center text-xs font-semibold">📱 Escanear QR</button>
+            <div className="grid grid-cols-2 gap-4">
+              <button 
+                onClick={() => cameraRef.current?.click()} 
+                className="flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed border-slate-300 rounded-3xl hover:bg-white transition-all group"
+              >
+                <div className="p-4 bg-emerald-50 rounded-2xl group-hover:bg-emerald-100 transition-colors text-2xl">📸</div>
+                <span className="text-sm font-bold text-slate-700">Tomar Foto</span>
+              </button>
+              <button 
+                onClick={() => setLiveScanner(true)} 
+                className="flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed border-slate-300 rounded-3xl hover:bg-white transition-all group"
+              >
+                <div className="p-4 bg-emerald-50 rounded-2xl group-hover:bg-emerald-100 transition-colors text-2xl">📱</div>
+                <span className="text-sm font-bold text-slate-700">Escanear QR</span>
+              </button>
             </div>
           )}
 
           <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
 
+          {/* Lista de gastos capturados que aparecen ABAJO solo después de confirmar la foto o QR */}
           {docs.length > 0 && (
-            <div className="space-y-4">
+            <div className="space-y-4 pt-4">
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Gastos en Lista</h3>
               {docs.map((doc) => (
-                <div key={doc.id} className="p-4 bg-white rounded-2xl shadow-sm border border-slate-200">
-                   <ItemFields value={doc.draft} onChange={(k, v) => updateDoc(doc.id, k, v)} />
+                <div key={doc.id} className="p-5 bg-white rounded-2xl shadow-sm border border-slate-200 space-y-4">
+                  {doc.photoUrl && <img src={doc.photoUrl} className="w-full h-32 object-cover rounded-xl" />}
+                  <ItemFields value={doc.draft} onChange={(k, v) => setDocs(prev => prev.map(d => d.id === doc.id ? { ...d, draft: { ...d.draft, [k]: v } } : d))} />
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        <footer className="p-5 border-t bg-white">
-          <button disabled={!selected.length || busy} onClick={save} className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold">
-            {busy ? "Guardando..." : "Guardar todo en Drive y Sheets"}
+        <footer className="p-5 border-t bg-white sm:rounded-b-3xl">
+          <button 
+            disabled={!selected.length || busy} 
+            onClick={saveAll} 
+            className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold shadow-xl disabled:opacity-50 transition-opacity"
+          >
+            {busy ? "Procesando..." : `Guardar ${selected.length} Gasto(s)`}
           </button>
         </footer>
       </div>
