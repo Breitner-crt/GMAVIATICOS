@@ -9,7 +9,7 @@
     "check-sheet": "node scripts/check-sheet.mjs"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.21.0",
+    "@google-cloud/documentai": "^6.4.0",
     "jsqr": "^1.4.0",
     "next": "15.5.28",
     "react": "19.1.0",
