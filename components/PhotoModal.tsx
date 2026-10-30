@@ -1,7 +1,8 @@
 "use client";
 
+// Forzar despliegue de almacenamiento de fotos Base64
 import { useRef, useState, useEffect } from "react";
-import type { OcrDocument, SheetData } from "@/lib/types";
+import type { SheetData } from "@/lib/types";
 import { api, compressImage } from "@/lib/client";
 import { parseGuatemalaQr } from "@/lib/satQr";
 import ItemFields, { draftFromItem, type ItemDraft } from "./ItemFields";
@@ -38,7 +39,6 @@ export default function PhotoModal({
   const [error, setError] = useState<string | null>(null);
   const [liveScanner, setLiveScanner] = useState(false);
   
-  // Estado para el modal exclusivo de revisión de foto
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [currentPhoto, setCurrentPhoto] = useState<{url: string, file: File} | null>(null);
 
@@ -47,7 +47,6 @@ export default function PhotoModal({
 
   const selected = docs.filter((doc) => doc.selected);
 
-  // Escáner QR en vivo
   useEffect(() => {
     if (!liveScanner) return;
     let stream: MediaStream | null = null;
@@ -99,9 +98,9 @@ export default function PhotoModal({
     };
   }, [liveScanner]);
 
-  function addScannedDoc(partial: Partial<OcrDocument>, origen: "qr" | "manual", photoUrl?: string) {
+  function addScannedDoc(partial: any, origen: "qr" | "manual", photoUrl?: string) {
     const today = new Date().toISOString().split("T")[0];
-    const fullDoc: OcrDocument = {
+    const fullDoc = {
       proveedor: partial.proveedor || "FACTURA DTE (SAT)",
       nit: partial.nit || "",
       tipoDoc: partial.tipoDoc || "FAC",
@@ -117,7 +116,7 @@ export default function PhotoModal({
       inguat: partial.inguat || "",
       pais: "GUATEMALA",
       sitio: "",
-      confianza: origen === "qr" ? "alta" : "baja",
+      comprobante: photoUrl || "",
     };
 
     setDocs((prev) => [
@@ -125,7 +124,7 @@ export default function PhotoModal({
       {
         id: nextId(),
         photoUrl,
-        draft: draftFromItem(fullDoc),
+        draft: draftFromItem(fullDoc as any),
         selected: true,
         origen,
       },
@@ -135,14 +134,19 @@ export default function PhotoModal({
   async function handleFiles(files: FileList | null) {
     if (!files || !files.length) return;
     const file = files[0];
-    const url = URL.createObjectURL(file);
-    // Abrimos el modal exclusivo para la foto, sin mostrar el formulario aún
-    setCurrentPhoto({ url, file });
-    setReviewModalOpen(true);
+    
+    const compressedBlob = await compressImage(file, 1200);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const base64Url = e.target?.result as string;
+      setCurrentPhoto({ url: base64Url, file });
+      setReviewModalOpen(true);
+    };
+    reader.readAsDataURL(compressedBlob);
+
     if (cameraRef.current) cameraRef.current.value = "";
   }
 
-  // Al confirmar en el modal de la foto, se agrega a la lista de "docs" y se cierra el modal de revisión
   function confirmPhoto() {
     if (currentPhoto) {
       addScannedDoc({}, "manual", currentPhoto.url);
@@ -155,10 +159,15 @@ export default function PhotoModal({
     setBusy(true);
     try {
       for (const doc of selected) {
+        const itemPayload = {
+          ...doc.draft,
+          sitio: doc.photoUrl ? "[FOTO ADJUNTA]" : "",
+        };
+        
         await api<SheetData>("/api/items", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ item: doc.draft, photoUrl: doc.photoUrl }),
+          body: JSON.stringify({ item: itemPayload }),
         });
       }
       onClose();
@@ -172,7 +181,6 @@ export default function PhotoModal({
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 backdrop-blur-sm sm:items-center sm:p-6">
       
-      {/* MODAL EXCLUSIVO PARA LA FOTO (REVISIÓN) */}
       {reviewModalOpen && currentPhoto && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black p-4 sm:p-10">
           <div className="relative w-full max-w-2xl h-full flex flex-col items-center justify-center space-y-6">
@@ -213,7 +221,7 @@ export default function PhotoModal({
           {liveScanner ? (
             <div className="relative rounded-2xl bg-black aspect-video flex flex-col items-center justify-center overflow-hidden">
               <video ref={videoRef} playsInline className="h-full w-full object-cover" />
-              <button onClick={() => setLiveScanner(false)} className="absolute bottom-4 bg-white/20 backdrop-blur-md px-6 py-2 rounded-full text-white text-xs font-bold">Cerrar Escáner</button>
+              <button onClick={() => setLiveScanner(false)} className="absolute bottom-4 bg-white/25 backdrop-blur-md px-6 py-2 rounded-full text-white text-xs font-bold">Cerrar Escáner</button>
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-4">
@@ -236,13 +244,17 @@ export default function PhotoModal({
 
           <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
 
-          {/* Lista de gastos capturados que aparecen ABAJO solo después de confirmar la foto o QR */}
           {docs.length > 0 && (
             <div className="space-y-4 pt-4">
-              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Gastos en Lista</h3>
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Gastos en Lista ({docs.length})</h3>
               {docs.map((doc) => (
                 <div key={doc.id} className="p-5 bg-white rounded-2xl shadow-sm border border-slate-200 space-y-4">
-                  {doc.photoUrl && <img src={doc.photoUrl} className="w-full h-32 object-cover rounded-xl" />}
+                  {doc.photoUrl && (
+                    <div className="flex items-center gap-3 p-3 bg-emerald-50 rounded-xl border border-emerald-200">
+                      <img src={doc.photoUrl} className="w-12 h-12 object-cover rounded-lg" alt="Miniatura" />
+                      <span className="text-xs font-bold text-emerald-800">✓ Fotografía adjunta lista para guardar</span>
+                    </div>
+                  )}
                   <ItemFields value={doc.draft} onChange={(k, v) => setDocs(prev => prev.map(d => d.id === doc.id ? { ...d, draft: { ...d.draft, [k]: v } } : d))} />
                 </div>
               ))}
@@ -256,7 +268,7 @@ export default function PhotoModal({
             onClick={saveAll} 
             className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold shadow-xl disabled:opacity-50 transition-opacity"
           >
-            {busy ? "Procesando..." : `Guardar ${selected.length} Gasto(s)`}
+            {busy ? "Procesando..." : `Guardar ${selected.length} Gasto(s)`} 
           </button>
         </footer>
       </div>
