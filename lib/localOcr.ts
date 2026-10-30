@@ -1,5 +1,4 @@
 import type { OcrDocument } from "./types";
-import { parseGuatemalaInvoiceText } from "./textOcrParser";
 
 interface OcrResult {
   doc: OcrDocument;
@@ -11,23 +10,20 @@ export async function runLocalOcr(imageBlob: Blob): Promise<OcrResult> {
   formData.append("file", imageBlob, "invoice.jpg");
 
   try {
-    // Conectando al servidor local de EasyOCR en tu computadora (http://localhost:8000)
-    const response = await fetch("http://localhost:8000/ocr", {
+    const response = await fetch("/api/ocr", {
       method: "POST",
       body: formData,
     });
 
     if (!response.ok) {
-      throw new Error(`Error en servidor EasyOCR: ${response.statusText}`);
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || `Error en servidor OCR: ${response.statusText}`);
     }
 
-    const data = await response.json();
-    const text = data.fullText || "";
-    const doc = parseGuatemalaInvoiceText(text);
-
-    return { doc, text };
+    const doc: OcrDocument = await response.json();
+    return { doc, text: "Procesado con éxito mediante Google Cloud Document AI (Invoice Parser)." };
   } catch (err) {
-    console.error("Fallo al conectar con EasyOCR local:", err);
+    console.error("Fallo al conectar con Google Document AI:", err);
     const fallbackDoc: OcrDocument = {
       proveedor: "ESTABLECIMIENTO",
       nit: "",
@@ -48,7 +44,7 @@ export async function runLocalOcr(imageBlob: Blob): Promise<OcrResult> {
     };
     return {
       doc: fallbackDoc,
-      text: "Error: No se pudo conectar a EasyOCR local (http://localhost:8000). Asegúrate de que 'python main.py' esté corriendo.",
+      text: err instanceof Error ? err.message : "Error al procesar la factura con Google Cloud Document AI.",
     };
   }
 }
