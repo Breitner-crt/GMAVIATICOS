@@ -40,50 +40,87 @@ export function parseGuatemalaInvoiceText(rawText: string): OcrDocument {
   };
 
   // 1. Proveedor
-  const hotelMatch = fullText.match(/(HOTEL\s+[A-Z\s]+)/i);
-  if (hotelMatch) {
-    doc.proveedor = hotelMatch[1].replace(/SEFIE|SEF|COLONIA.*$|,.*$/i, "").trim();
+  const hotelLine = lines.find(l => l.toUpperCase().includes("HOTEL"));
+  if (hotelLine) {
+    doc.proveedor = hotelLine.replace(/SEFIE|SEF|COLONIA.*$|,.*$/i, "").trim();
   } else {
     doc.proveedor = "HOTEL LA PAZ";
   }
 
-  // 2. NIT Emisor (Específico para capturar los 7 u 8 dígitos del emisor)
-  const nitMatch = fullText.match(/(?:NIT\s*EMISOR|NIEMISOR|EMISOR)[:\s]*([0-9]{7,8})/i) || fullText.match(/\bNIT[:\s]*([0-9]{7,8})/i);
-  if (nitMatch) {
-    doc.nit = nitMatch[1].trim();
-  }
+  // 2. Escaneo línea por línea para campos críticos (NIT, DTE, Fecha, Valores)
+  let foundTotal = 0;
 
-  // 3. Serie (Primeros 8 caracteres alfanuméricos del UUID)
-  const serieMatch = fullText.match(/\b([A-F0-9]{8})-[A-F0-9]{4}/i) || fullText.match(/SERIE[:\s]*([A-Z0-9]{8})/i);
-  if (serieMatch) {
-    doc.serie = serieMatch[1].trim();
-  }
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const upper = line.toUpperCase();
 
-  // 4. Número de DTE (Captura estricta de los 10 dígitos completos, ej. 1617250229)
-  const numMatch = fullText.match(/(?:DTE|DIE)[^0-9]*([0-9]{10})/i) || fullText.match(/\b(16[0-9]{8})\b/);
-  if (numMatch) {
-    doc.numero = (numMatch[1] || numMatch[0]).trim();
-  }
+    // --- NIT EMISOR ---
+    if ((upper.includes("NIT") || upper.includes("EMISOR") || upper.includes("NIEMISOR")) && !doc.nit) {
+      if (!upper.includes("RECEPTOR")) {
+        const match = upper.match(/([0-9]{7,8})/);
+        if (match && match[1] !== "50744720") {
+          doc.nit = match[1];
+        }
+      }
+    }
 
-  // 5. Fecha de Emisión
-  const dateMatch = fullText.match(/\b([0-3]?[0-9])[\/\-.](ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|OC1|NOV|DIC)[A-Z]*[\/\-.](202[3-9]|20[0-9]{2})\b/i);
-  if (dateMatch) {
-    doc.fecha = `${dateMatch[3]}-${monthToNumber(dateMatch[2])}-${dateMatch[1].padStart(2, "0")}`;
-  }
+    // --- NÚMERO DE DTE ---
+    if ((upper.includes("DTE") || upper.includes("DIE") || upper.includes("NUMERO")) && !doc.numero) {
+      const match = upper.match(/([0-9]{8,12})/);
+      if (match) {
+        doc.numero = match[1];
+      }
+    }
 
-  // 6. Valor Total (Búsqueda robusta de montos monetarios limpios en todo el texto)
-  const decimalAmounts = fullText.match(/\b[0-9]{1,4}[.,][0-9]{2}\b/g);
-  if (decimalAmounts) {
-    const nums = decimalAmounts
-      .map(a => parseFloat(a.replace(",", ".")))
-      .filter(n => !isNaN(n) && n >= 100 && n < 10000); // Filtra impuestos pequeños y se queda con el total real
-    
-    if (nums.length > 0) {
-      doc.valor = Math.max(...nums).toFixed(2);
+    // --- SERIE ---
+    if ((upper.includes("SERIE") || upper.includes("AUTORIZACION")) && !doc.serie) {
+      const uuidMatch = upper.match(/\b([A-F0-9]{8})-[A-F0-9]{4}/);
+      if (uuidMatch) {
+        doc.serie = uuidMatch[1];
+      } else {
+        const serieMatch = upper.match(/SERIE[:\s]*([A-Z0-9]{8})/);
+        if (serieMatch) doc.serie = serieMatch[1];
+      }
+    }
+
+    // --- FECHA ---
+    const dateMatch = upper.match(/\b([0-3]?[0-9])[\/\-.](ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|OC1|NOV|DIC)[A-Z]*[\/\-.](202[3-9]|20[0-9]{2})\b/);
+    if (dateMatch && doc.fecha === new Date().toISOString().split("T")[0]) {
+      doc.fecha = `${dateMatch[3]}-${monthToNumber(dateMatch[2])}-${dateMatch[1].padStart(2, "0")}`;
+    }
+
+    // --- TOTALES ---
+    if (upper.includes("TOTAL") || upper.includes("TOT") || upper.includes("NJ.OL")) {
+      const block = (lines[i] + " " + (lines[i + 1] || "")).toUpperCase();
+      const numbers = block.match(/\b[0-9]{1,4}[.,][0-9]{2}\b/g);
+      if (numbers) {
+        const parsedNums = numbers.map(n => parseFloat(n.replace(",", "."))).filter(n => n >= 50 && n < 100000);
+        if (parsedNums.length > 0) {
+          const maxVal = Math.max(...parsedNums);
+          if (maxVal > foundTotal) {
+            foundTotal = maxVal;
+          }
+        }
+      }
     }
   }
 
-  // 7. Tipo de Gasto y Concepto
+  // 3. Fallback global para el Total
+  if (foundTotal === 0) {
+    const allDecimals = fullText.match(/\b[0-9]{1,4}[.,][0-9]{2}\b/g);
+    if (allDecimals) {
+      const valid = allDecimals.map(a => parseFloat(a.replace(",", "."))).filter(n => !isNaN(n) && n >= 50 && n < 100000);
+      if (valid.length > 0) {
+        foundTotal = Math.max(...valid);
+      }
+    }
+  }
+
+  if (foundTotal > 0) {
+    doc.valor = foundTotal.toFixed(2);
+  }
+
+  // 4. Tipo de Gasto y Concepto
   const isHotel = fullText.includes("HOTEL") || fullText.includes("HOSPEDAJE") || fullText.includes("TURISMO");
   if (isHotel) {
     doc.tipoGasto = "Hospedaje";
