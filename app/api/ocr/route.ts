@@ -3,15 +3,24 @@ import { NextResponse } from "next/server";
 import type { OcrDocument } from "@/lib/types";
 
 // Inicializar el cliente con las credenciales de entorno de Vercel/Local
-function getClient() {
+function getClient(processorName: string) {
   const credentialsEnv = process.env.GOOGLE_DOCUMENT_AI_CREDENTIALS;
   if (!credentialsEnv) {
     throw new Error("Falta la variable de entorno GOOGLE_DOCUMENT_AI_CREDENTIALS");
   }
   
+  // Extraer la ubicación del nombre del procesador (ej: projects/.../locations/us/...)
+  const locationMatch = processorName.match(/locations\/([a-z0-9-]+)/i);
+  const location = locationMatch ? locationMatch[1] : "us";
+  const apiEndpoint = `${location}-documentai.googleapis.com`;
+
   try {
     const credentials = JSON.parse(credentialsEnv);
-    return new DocumentProcessorServiceClient({ credentials });
+    return new DocumentProcessorServiceClient({ 
+      credentials,
+      apiEndpoint,
+      fallback: true // Usar REST en lugar de gRPC para evitar el error "a.copy is not a function" en Vercel
+    });
   } catch (e) {
     throw new Error("El JSON de GOOGLE_DOCUMENT_AI_CREDENTIALS es inválido.");
   }
@@ -26,16 +35,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No se encontró ningún archivo" }, { status: 400 });
     }
 
-    const imageBuffer = Buffer.from(await file.arrayBuffer());
-    const client = getClient();
-
-    const name = process.env.DOCUMENT_AI_PROCESSOR_NAME;
-    if (!name) {
+    const processorName = process.env.DOCUMENT_AI_PROCESSOR_NAME;
+    if (!processorName) {
       return NextResponse.json({ error: "Falta la variable DOCUMENT_AI_PROCESSOR_NAME" }, { status: 500 });
     }
 
+    const imageBuffer = Buffer.from(await file.arrayBuffer());
+    const client = getClient(processorName);
+
     const request = {
-      name,
+      name: processorName,
       rawDocument: {
         content: imageBuffer,
         mimeType: file.type || "image/jpeg",
