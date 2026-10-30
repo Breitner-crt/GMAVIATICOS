@@ -1,6 +1,6 @@
 "use client";
 
-// Forzar despliegue de almacenamiento de fotos Base64
+// Actualización para enviar photoBase64 directo a la API de Google Drive
 import { useRef, useState, useEffect } from "react";
 import type { SheetData } from "@/lib/types";
 import { api, compressImage } from "@/lib/client";
@@ -11,6 +11,7 @@ import jsQR from "jsqr";
 type DocState = {
   id: string;
   photoUrl?: string;
+  photoBase64?: string;
   draft: ItemDraft;
   selected: boolean;
   origen: "qr" | "manual";
@@ -40,7 +41,7 @@ export default function PhotoModal({
   const [liveScanner, setLiveScanner] = useState(false);
   
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
-  const [currentPhoto, setCurrentPhoto] = useState<{url: string, file: File} | null>(null);
+  const [currentPhoto, setCurrentPhoto] = useState<{url: string, base64: string} | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -98,7 +99,7 @@ export default function PhotoModal({
     };
   }, [liveScanner]);
 
-  function addScannedDoc(partial: any, origen: "qr" | "manual", photoUrl?: string) {
+  function addScannedDoc(partial: any, origen: "qr" | "manual", photoUrl?: string, photoBase64?: string) {
     const today = new Date().toISOString().split("T")[0];
     const fullDoc = {
       proveedor: partial.proveedor || "FACTURA DTE (SAT)",
@@ -116,7 +117,6 @@ export default function PhotoModal({
       inguat: partial.inguat || "",
       pais: "GUATEMALA",
       sitio: "",
-      comprobante: photoUrl || "",
     };
 
     setDocs((prev) => [
@@ -124,6 +124,7 @@ export default function PhotoModal({
       {
         id: nextId(),
         photoUrl,
+        photoBase64,
         draft: draftFromItem(fullDoc as any),
         selected: true,
         origen,
@@ -139,7 +140,7 @@ export default function PhotoModal({
     const reader = new FileReader();
     reader.onload = (e) => {
       const base64Url = e.target?.result as string;
-      setCurrentPhoto({ url: base64Url, file });
+      setCurrentPhoto({ url: base64Url, base64: base64Url });
       setReviewModalOpen(true);
     };
     reader.readAsDataURL(compressedBlob);
@@ -149,7 +150,7 @@ export default function PhotoModal({
 
   function confirmPhoto() {
     if (currentPhoto) {
-      addScannedDoc({}, "manual", currentPhoto.url);
+      addScannedDoc({}, "manual", currentPhoto.url, currentPhoto.base64);
       setReviewModalOpen(false);
       setCurrentPhoto(null);
     }
@@ -159,20 +160,18 @@ export default function PhotoModal({
     setBusy(true);
     try {
       for (const doc of selected) {
-        const itemPayload = {
-          ...doc.draft,
-          sitio: doc.photoUrl ? "[FOTO ADJUNTA]" : "",
-        };
-        
         await api<SheetData>("/api/items", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ item: itemPayload }),
+          body: JSON.stringify({ 
+            item: doc.draft, 
+            photoBase64: doc.photoBase64 
+          }),
         });
       }
       onClose();
     } catch (err) {
-      setError("Error al guardar.");
+      setError("Error al guardar en Google Drive y Sheets.");
     } finally {
       setBusy(false);
     }
@@ -252,7 +251,7 @@ export default function PhotoModal({
                   {doc.photoUrl && (
                     <div className="flex items-center gap-3 p-3 bg-emerald-50 rounded-xl border border-emerald-200">
                       <img src={doc.photoUrl} className="w-12 h-12 object-cover rounded-lg" alt="Miniatura" />
-                      <span className="text-xs font-bold text-emerald-800">✓ Fotografía adjunta lista para guardar</span>
+                      <span className="text-xs font-bold text-emerald-800">✓ Fotografía lista para subir a Google Drive</span>
                     </div>
                   )}
                   <ItemFields value={doc.draft} onChange={(k, v) => setDocs(prev => prev.map(d => d.id === doc.id ? { ...d, draft: { ...d.draft, [k]: v } } : d))} />
@@ -268,7 +267,7 @@ export default function PhotoModal({
             onClick={saveAll} 
             className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold shadow-xl disabled:opacity-50 transition-opacity"
           >
-            {busy ? "Procesando..." : `Guardar ${selected.length} Gasto(s)`} 
+            {busy ? "Subiendo a Drive y Guardando..." : `Guardar ${selected.length} Gasto(s)`} 
           </button>
         </footer>
       </div>
