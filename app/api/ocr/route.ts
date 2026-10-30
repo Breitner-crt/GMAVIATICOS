@@ -2,25 +2,27 @@ import { DocumentProcessorServiceClient } from "@google-cloud/documentai";
 import { NextResponse } from "next/server";
 import type { OcrDocument } from "@/lib/types";
 
-// Inicializar el cliente con las credenciales de entorno de Vercel/Local
 function getClient(processorName: string) {
   const credentialsEnv = process.env.GOOGLE_DOCUMENT_AI_CREDENTIALS;
   if (!credentialsEnv) {
     throw new Error("Falta la variable de entorno GOOGLE_DOCUMENT_AI_CREDENTIALS");
   }
   
-  // Extraer la ubicación del nombre del procesador (ej: projects/.../locations/us/...)
   const locationMatch = processorName.match(/locations\/([a-z0-9-]+)/i);
   const location = locationMatch ? locationMatch[1] : "us";
   const apiEndpoint = `${location}-documentai.googleapis.com`;
 
   try {
     const credentials = JSON.parse(credentialsEnv);
-    return new DocumentProcessorServiceClient({ 
-      credentials,
-      apiEndpoint,
-      fallback: true // Usar REST en lugar de gRPC para evitar el error "a.copy is not a function" en Vercel
-    });
+    return {
+      client: new DocumentProcessorServiceClient({ 
+        credentials,
+        apiEndpoint,
+        fallback: true
+      }),
+      projectId: credentials.project_id,
+      location
+    };
   } catch (e) {
     throw new Error("El JSON de GOOGLE_DOCUMENT_AI_CREDENTIALS es inválido.");
   }
@@ -35,27 +37,32 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No se encontró ningún archivo" }, { status: 400 });
     }
 
-    const processorName = process.env.DOCUMENT_AI_PROCESSOR_NAME;
+    let processorName = process.env.DOCUMENT_AI_PROCESSOR_NAME || "";
     if (!processorName) {
       return NextResponse.json({ error: "Falta la variable DOCUMENT_AI_PROCESSOR_NAME" }, { status: 500 });
     }
 
-    const imageBuffer = Buffer.from(await file.arrayBuffer());
-    const client = getClient(processorName);
+    const { client, projectId, location } = getClient(processorName);
+
+    // Si el usuario solo puso el ID (ej: b873c328791218cb), construimos la ruta completa automáticamente
+    if (!processorName.includes("/")) {
+      processorName = `projects/${projectId}/locations/${location}/processors/${processorName}`;
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const encodedImage = Buffer.from(arrayBuffer).toString("base64");
 
     const request = {
       name: processorName,
       rawDocument: {
-        content: imageBuffer,
+        content: encodedImage,
         mimeType: file.type || "image/jpeg",
       },
     };
 
     const [result] = await client.processDocument(request);
-    const document = result.document;
-    const entities = document?.entities || [];
+    const entities = result.document?.entities || [];
 
-    // Objeto auxiliar para extraer entidades de Google Document AI (Invoice Parser)
     const getEntityText = (type: string) => {
       const entity = entities.find(e => e.type === type);
       return entity?.mentionText || "";
@@ -66,9 +73,8 @@ export async function POST(req: Request) {
     const serie = getEntityText("invoice_id") || "";
     const numero = getEntityText("invoice_id") || "";
     const fechaRaw = getEntityText("invoice_date");
-    const valor = getEntityText("total_amount").replace(/[^0-9.]/g, "") || "0";
+    const valorStr = getEntityText("total_amount").replace(/[^0-9.]/g, "") || "0";
 
-    // Formatear fecha si viene de Google
     let fecha = new Date().toISOString().split("T")[0];
     if (fechaRaw) {
       const parsedDate = new Date(fechaRaw);
@@ -89,7 +95,7 @@ export async function POST(req: Request) {
       placa: "",
       concepto: isHotel ? "HOSPEDAJE / ALOJAMIENTO" : "CONSUMO GENERAL",
       tipoGasto: isHotel ? "Hospedaje" : "Viáticos",
-      valor: parseFloat(valor || "0").toFixed(2),
+      valor: parseFloat(valorStr).toFixed(2),
       galones: "",
       tipoComb: "",
       inguat: "",
@@ -102,7 +108,7 @@ export async function POST(req: Request) {
   } catch (err) {
     console.error("Error en Google Document AI:", err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Error procesando con Google Document AI" },
+      { error: err instanceof Error ? err.message : "Error desconocido" },
       { status: 500 }
     );
   }
