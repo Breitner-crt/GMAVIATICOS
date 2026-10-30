@@ -11,11 +11,11 @@ export async function runLocalOcr(imageBlob: Blob): Promise<OcrResult> {
   formData.append("file", imageBlob, "invoice.jpg");
 
   try {
-    // Conectando al túnel de Localtunnel que apunta a tu EasyOCR local
-    const response = await fetch("https://sour-spoons-pull.loca.lt/ocr", {
+    // Conectando al nuevo túnel de Localtunnel que apunta a tu EasyOCR local
+    const response = await fetch("https://salty-rabbits-smile.loca.lt/ocr", {
       method: "POST",
       headers: {
-        "Bypass-Tunnel-Reminder": "true", // Cabecera necesaria para Localtunnel
+        "Bypass-Tunnel-Reminder": "true",
       },
       body: formData,
     });
