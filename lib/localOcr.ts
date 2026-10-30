@@ -11,12 +11,9 @@ export async function runLocalOcr(imageBlob: Blob): Promise<OcrResult> {
   formData.append("file", imageBlob, "invoice.jpg");
 
   try {
-    // Conectando al nuevo túnel de Localtunnel que apunta a tu EasyOCR local
-    const response = await fetch("https://salty-rabbits-smile.loca.lt/ocr", {
+    // Conectando al túnel de Serveo que apunta a tu EasyOCR local
+    const response = await fetch("https://2f486467a8dd398b-200-119-178-205.serveousercontent.com/ocr", {
       method: "POST",
-      headers: {
-        "Bypass-Tunnel-Reminder": "true",
-      },
       body: formData,
     });
 
@@ -30,7 +27,7 @@ export async function runLocalOcr(imageBlob: Blob): Promise<OcrResult> {
 
     return { doc, text };
   } catch (err) {
-    console.error("Fallo al conectar con EasyOCR por Localtunnel:", err);
+    console.error("Fallo al conectar con EasyOCR por Serveo:", err);
     const fallbackDoc: OcrDocument = {
       proveedor: "ESTABLECIMIENTO",
       nit: "",
@@ -51,7 +48,7 @@ export async function runLocalOcr(imageBlob: Blob): Promise<OcrResult> {
     };
     return {
       doc: fallbackDoc,
-      text: "Error: No se pudo conectar a EasyOCR a través de Localtunnel. Verifica que 'lt --port 8000' y 'python main.py' sigan corriendo.",
+      text: "Error: No se pudo conectar a EasyOCR a través de Serveo. Verifica que 'python main.py' y 'ssh -R 80:localhost:8000 serveo.net' sigan corriendo.",
     };
   }
 }
