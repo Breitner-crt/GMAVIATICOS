@@ -11,8 +11,8 @@ export async function runLocalOcr(imageBlob: Blob): Promise<OcrResult> {
   formData.append("file", imageBlob, "invoice.jpg");
 
   try {
-    // Conectando al nuevo túnel de Serveo que apunta a tu EasyOCR local
-    const response = await fetch("https://08a3374ae3a08068-200-119-178-205.serveousercontent.com/ocr", {
+    // Conectando al servidor local de EasyOCR en tu computadora (http://localhost:8000)
+    const response = await fetch("http://localhost:8000/ocr", {
       method: "POST",
       body: formData,
     });
@@ -27,7 +27,7 @@ export async function runLocalOcr(imageBlob: Blob): Promise<OcrResult> {
 
     return { doc, text };
   } catch (err) {
-    console.error("Fallo al conectar con EasyOCR por Serveo:", err);
+    console.error("Fallo al conectar con EasyOCR local:", err);
     const fallbackDoc: OcrDocument = {
       proveedor: "ESTABLECIMIENTO",
       nit: "",
@@ -48,7 +48,7 @@ export async function runLocalOcr(imageBlob: Blob): Promise<OcrResult> {
     };
     return {
       doc: fallbackDoc,
-      text: "Error: No se pudo conectar a EasyOCR a través de Serveo. Verifica que 'python main.py' y 'ssh -R 80:localhost:8000 serveo.net' sigan corriendo.",
+      text: "Error: No se pudo conectar a EasyOCR local (http://localhost:8000). Asegúrate de que 'python main.py' esté corriendo.",
     };
   }
 }
