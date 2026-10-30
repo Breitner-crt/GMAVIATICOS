@@ -233,148 +233,148 @@ export default function PhotoModal({
   }
 
   return (
-    <div className=\"fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 backdrop-blur-sm sm:items-center sm:p-6\">
-      <div className=\"flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl\">
-        <header className=\"flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:rounded-t-3xl\">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 backdrop-blur-sm sm:items-center sm:p-6">
+      <div className="flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl">
+        <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:rounded-t-3xl">
           <div>
-            <h2 className=\"text-base font-semibold\">Agregar Gasto</h2>
-            <p className=\"text-xs text-slate-500\">
+            <h2 className="text-base font-semibold">Agregar Gasto</h2>
+            <p className="text-xs text-slate-500">
               Detección por QR (SAT) o llenado manual.
             </p>
           </div>
           <button
-            type=\"button\"
+            type="button"
             onClick={onClose}
-            className=\"rounded-full p-2 text-slate-500 hover:bg-slate-100\"
+            className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
           >
-            <svg viewBox=\"0 0 24 24\" className=\"h-5 w-5\" fill=\"none\" stroke=\"currentColor\" strokeWidth=\"2\">
-              <path d=\"M6 6l12 12M18 6L6 18\" strokeLinecap=\"round\" />
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
             </svg>
           </button>
         </header>
 
-        <div className=\"flex-1 overflow-y-auto p-5 space-y-5\">
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {error && (
-            <div className=\"rounded-xl bg-rose-50 p-3 text-xs font-medium text-rose-700\">
+            <div className="rounded-xl bg-rose-50 p-3 text-xs font-medium text-rose-700">
               {error}
             </div>
           )}
 
           {liveScanner ? (
-            <div className=\"relative overflow-hidden rounded-2xl bg-black aspect-video flex flex-col items-center justify-center\">
-              <video ref={videoRef} playsInline className=\"h-full w-full object-cover\" />
-              <div className=\"absolute inset-0 border-2 border-emerald-400/80 rounded-2xl pointer-events-none flex items-center justify-center\">
-                <div className=\"w-48 h-48 border-2 border-dashed border-white/80 rounded-xl\" />
+            <div className="relative overflow-hidden rounded-2xl bg-black aspect-video flex flex-col items-center justify-center">
+              <video ref={videoRef} playsInline className="h-full w-full object-cover" />
+              <div className="absolute inset-0 border-2 border-emerald-400/80 rounded-2xl pointer-events-none flex items-center justify-center">
+                <div className="w-48 h-48 border-2 border-dashed border-white/80 rounded-xl" />
               </div>
               <button
-                type=\"button\"
+                type="button"
                 onClick={() => setLiveScanner(false)}
-                className=\"absolute bottom-3 rounded-full bg-slate-900/80 px-4 py-1.5 text-xs font-semibold text-white backdrop-blur-sm\"
+                className="absolute bottom-3 rounded-full bg-slate-900/80 px-4 py-1.5 text-xs font-semibold text-white backdrop-blur-sm"
               >
                 Cancelar escáner
               </button>
             </div>
           ) : (
-            <div className=\"grid grid-cols-2 gap-2\">
+            <div className="grid grid-cols-2 gap-2">
               <button
-                type=\"button\"
+                type="button"
                 onClick={() => cameraRef.current?.click()}
-                className=\"flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-4 text-center hover:border-emerald-500 hover:bg-emerald-50/50\"
+                className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-4 text-center hover:border-emerald-500 hover:bg-emerald-50/50"
               >
-                <svg className=\"h-6 w-6 text-emerald-600\" fill=\"none\" viewBox=\"0 0 24 24\" stroke=\"currentColor\" strokeWidth=\"2\">
-                  <path strokeLinecap=\"round\" strokeLinejoin=\"round\" d=\"M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z\" />
-                  <path strokeLinecap=\"round\" strokeLinejoin=\"round\" d=\"M15 13a3 3 0 11-6 0 3 3 0 016 0z\" />
+                <svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
-                <span className=\"text-xs font-semibold text-slate-700\">Tomar foto</span>
+                <span className="text-xs font-semibold text-slate-700">Tomar foto</span>
               </button>
 
               <button
-                type=\"button\"
+                type="button"
                 onClick={() => setLiveScanner(true)}
-                className=\"flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-4 text-center hover:border-emerald-500 hover:bg-emerald-50/50\"
+                className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-4 text-center hover:border-emerald-500 hover:bg-emerald-50/50"
               >
-                <svg className=\"h-6 w-6 text-emerald-600\" fill=\"none\" viewBox=\"0 0 24 24\" stroke=\"currentColor\" strokeWidth=\"2\">
-                  <path strokeLinecap=\"round\" strokeLinejoin=\"round\" d=\"M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z\" />
+                <svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
                 </svg>
-                <span className=\"text-xs font-semibold text-slate-700\">Escanear QR</span>
+                <span className="text-xs font-semibold text-slate-700">Escanear QR</span>
               </button>
             </div>
           )}
 
           <input
             ref={cameraRef}
-            type=\"file\"
-            accept=\"image/*\"
-            capture=\"environment\"
-            className=\"hidden\"
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
             onChange={(e) => handleFiles(e.target.files)}
           />
 
-          {photos.some((p) => p.status === \"reading\") && (
-            <div className=\"flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800\">
-              <svg className=\"h-4 w-4 animate-spin\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" strokeWidth=\"2\">
-                <path d=\"M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83\" strokeLinecap=\"round\" />
+          {photos.some((p) => p.status === "reading") && (
+            <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
+              <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
               </svg>
               Buscando código QR...
             </div>
           )}
 
           {docs.length > 0 && (
-            <div className=\"space-y-4\">
-              <h3 className=\"text-xs font-semibold uppercase tracking-wider text-slate-500\">
+            <div className="space-y-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Gastos detectados ({docs.length})
               </h3>
               {docs.map((doc) => (
-                <div key={doc.id} className=\"rounded-2xl border border-slate-200 bg-white p-4 space-y-4 shadow-sm\">
-                  <div className=\"flex items-center justify-between border-b border-slate-100 pb-2\">
-                    <label className=\"flex items-center gap-2 text-xs font-medium text-slate-700\">
+                <div key={doc.id} className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4 shadow-sm">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                    <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
                       <input
-                        type=\"checkbox\"
+                        type="checkbox"
                         checked={doc.selected}
                         onChange={() => toggleDoc(doc.id)}
-                        className=\"h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500\"
+                        className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                       />
                       Incluir en la liquidación
                     </label>
-                    {doc.origen === \"qr\" ? (
-                      <span className=\"rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 uppercase tracking-wide\">
+                    {doc.origen === "qr" ? (
+                      <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 uppercase tracking-wide">
                         ✓ Datos por QR (Exacto)
                       </span>
                     ) : (
-                      <span className=\"rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-bold text-slate-800 uppercase tracking-wide\">
+                      <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-bold text-slate-800 uppercase tracking-wide">
                         📝 Llenado Manual
                       </span>
                     )}
                   </div>
 
                   {doc.photoUrl && (
-                    <div className=\"relative max-h-40 overflow-hidden rounded-xl border border-slate-200 bg-slate-100\">
+                    <div className="relative max-h-40 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
                       <img
                         src={doc.photoUrl}
-                        alt=\"Factura\"
-                        className=\"h-full w-full object-contain cursor-zoom-in\"
-                        onClick={() => window.open(doc.photoUrl, \"_blank\")}
+                        alt="Factura"
+                        className="h-full w-full object-contain cursor-zoom-in"
+                        onClick={() => window.open(doc.photoUrl, "_blank")}
                       />
                     </div>
                   )}
 
-                  <div className=\"space-y-1.5\">
-                    <label className=\"text-[11px] font-semibold text-slate-600\">Categoría rápida:</label>
-                    <div className=\"grid grid-cols-4 gap-1.5\">
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-semibold text-slate-600">Categoría rápida:</label>
+                    <div className="grid grid-cols-4 gap-1.5">
                       {[
-                        { label: \"⛽ Gasolina\", val: \"Combustible\" },
-                        { label: \"🍽️ Viáticos\", val: \"Viáticos\" },
-                        { label: \"🏨 Hotel\", val: \"Hospedaje\" },
-                        { label: \"📦 Otros\", val: \"Otros\" },
+                        { label: "⛽ Gasolina", val: "Combustible" },
+                        { label: "🍽️ Viáticos", val: "Viáticos" },
+                        { label: "🏨 Hotel", val: "Hospedaje" },
+                        { label: "📦 Otros", val: "Otros" },
                       ].map((cat) => (
                         <button
                           key={cat.val}
-                          type=\"button\"
+                          type="button"
                           onClick={() => setQuickCategory(doc.id, cat.val)}
                           className={`rounded-xl py-1.5 text-[11px] font-semibold transition ${doc.draft.tipoGasto === cat.val
-                              ? \"bg-emerald-600 text-white shadow-sm\"
-                              : \"bg-slate-100 text-slate-700 hover:bg-slate-200\"
-                            }`}
+                            ? "bg-emerald-600 text-white shadow-sm"
+                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          }`}
                         >
                           {cat.label}
                         </button>
@@ -389,21 +389,21 @@ export default function PhotoModal({
           )}
         </div>
 
-        <footer className=\"flex items-center justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:rounded-b-3xl\">
+        <footer className="flex items-center justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:rounded-b-3xl">
           <button
-            type=\"button\"
+            type="button"
             onClick={onManual}
-            className=\"rounded-xl px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100\"
+            className="rounded-xl px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100"
           >
             Agregar a mano
           </button>
           <button
-            type=\"button\"
+            type="button"
             disabled={!selected.length || busy}
             onClick={save}
-            className=\"rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:opacity-50\"
+            className="rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:opacity-50"
           >
-            {busy ? \"Guardando...\" : `Guardar ${selected.length} gasto(s)`}
+            {busy ? "Guardando..." : `Guardar ${selected.length} gasto(s)`}
           </button>
         </footer>
       </div>
