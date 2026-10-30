@@ -2,7 +2,7 @@
 
 import { useRef, useState, useEffect } from "react";
 import type { OcrDocument, SheetData } from "@/lib/types";
-import { api, compressImage, scanQrFromBlob } from "@/lib/client";
+import { api, compressImage } from "@/lib/client";
 import { parseGuatemalaQr } from "@/lib/satQr";
 import ItemFields, { draftFromItem, type ItemDraft } from "./ItemFields";
 import jsQR from "jsqr";
@@ -37,6 +37,11 @@ export default function PhotoModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveScanner, setLiveScanner] = useState(false);
+  
+  // States para el modal de foto individual
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
+  const [currentPhoto, setCurrentPhoto] = useState<{url: string, id: string} | null>(null);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
 
@@ -132,15 +137,19 @@ export default function PhotoModal({
 
   async function handleFiles(files: FileList | null) {
     if (!files || !files.length) return;
-    setError(null);
-
-    for (const file of Array.from(files)) {
-      const url = URL.createObjectURL(file);
-      // Al tomar foto manual, simplemente adjuntamos la imagen y abrimos el formulario limpio
-      addScannedDoc({}, "manual", url);
-    }
-
+    const file = files[0];
+    const url = URL.createObjectURL(file);
+    setCurrentPhoto({ url, id: nextId() });
+    setPhotoModalOpen(true);
     if (cameraRef.current) cameraRef.current.value = "";
+  }
+
+  function savePhotoManual() {
+    if (currentPhoto) {
+      addScannedDoc({}, "manual", currentPhoto.url);
+      setPhotoModalOpen(false);
+      setCurrentPhoto(null);
+    }
   }
 
   function updateDoc(id: string, key: keyof ItemDraft, value: string) {
@@ -151,25 +160,8 @@ export default function PhotoModal({
     );
   }
 
-  function toggleDoc(id: string) {
-    setDocs((prev) =>
-      prev.map((doc) => (doc.id === id ? { ...doc, selected: !doc.selected } : doc))
-    );
-  }
-
   async function save() {
-    if (!selected.length) {
-      setError("Selecciona al menos un gasto para registrar.");
-      return;
-    }
-    if (selected.length > capacityLeft) {
-      setError(`Solo quedan ${capacityLeft} filas libres en el formato.`);
-      return;
-    }
-
     setBusy(true);
-    setError(null);
-
     try {
       for (const doc of selected) {
         await api<SheetData>("/api/items", {
@@ -180,7 +172,7 @@ export default function PhotoModal({
       }
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo guardar.");
+      setError("No se pudo guardar.");
     } finally {
       setBusy(false);
     }
@@ -188,96 +180,55 @@ export default function PhotoModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 backdrop-blur-sm sm:items-center sm:p-6">
+      {/* MODAL DE LLENADO MANUAL POST-FOTO */}
+      {photoModalOpen && currentPhoto && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white w-full max-w-lg rounded-3xl p-6 shadow-2xl">
+            <h3 className="text-lg font-bold mb-4">Llenar datos de factura</h3>
+            <img src={currentPhoto.url} className="w-full h-48 object-contain mb-4 rounded-xl bg-slate-100" />
+            <ItemFields value={draftFromItem({} as any)} onChange={(k, v) => {}} />
+            <button onClick={savePhotoManual} className="w-full mt-4 bg-emerald-600 text-white py-3 rounded-xl font-bold">
+              Guardar datos
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl">
         <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:rounded-t-3xl">
-          <div>
-            <h2 className="text-base font-semibold">Agregar Gasto</h2>
-            <p className="text-xs text-slate-500">
-              Usa QR para autocompletar o toma una foto para llenar manualmente.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
-          >
-            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
-            </svg>
-          </button>
+          <h2 className="text-base font-semibold">Captura de Gastos</h2>
+          <button type="button" onClick={onClose} className="p-2 text-slate-500">✕</button>
         </header>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
-          {error && (
-            <div className="rounded-xl bg-rose-50 p-3 text-xs font-medium text-rose-700">
-              {error}
-            </div>
-          )}
-
           {liveScanner ? (
-            <div className="relative overflow-hidden rounded-2xl bg-black aspect-video flex flex-col items-center justify-center">
+            <div className="relative rounded-2xl bg-black aspect-video flex flex-col items-center justify-center">
               <video ref={videoRef} playsInline className="h-full w-full object-cover" />
-              <button
-                type="button"
-                onClick={() => setLiveScanner(false)}
-                className="absolute bottom-3 rounded-full bg-slate-900/80 px-4 py-1.5 text-xs font-semibold text-white backdrop-blur-sm"
-              >
-                Cancelar
-              </button>
+              <button onClick={() => setLiveScanner(false)} className="absolute bottom-3 bg-white/20 px-4 py-1 rounded-full text-white text-xs">Cancelar</button>
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => cameraRef.current?.click()}
-                className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-4 text-center hover:border-emerald-500 hover:bg-emerald-50/50"
-              >
-                <span className="text-xs font-semibold text-slate-700">📸 Tomar Foto</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setLiveScanner(true)}
-                className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-300 bg-white p-4 text-center hover:border-emerald-500 hover:bg-emerald-50/50"
-              >
-                <span className="text-xs font-semibold text-slate-700">📱 Escanear QR</span>
-              </button>
+              <button onClick={() => cameraRef.current?.click()} className="p-4 border-2 border-dashed rounded-2xl text-center text-xs font-semibold">📸 Tomar Foto</button>
+              <button onClick={() => setLiveScanner(true)} className="p-4 border-2 border-dashed rounded-2xl text-center text-xs font-semibold">📱 Escanear QR</button>
             </div>
           )}
 
-          <input
-            ref={cameraRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="hidden"
-            onChange={(e) => handleFiles(e.target.files)}
-          />
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
 
           {docs.length > 0 && (
             <div className="space-y-4">
               {docs.map((doc) => (
-                <div key={doc.id} className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4 shadow-sm">
-                  {doc.photoUrl && (
-                    <div className="relative max-h-40 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
-                      <img src={doc.photoUrl} alt="Factura" className="h-full w-full object-contain" />
-                    </div>
-                  )}
-                  <ItemFields value={doc.draft} onChange={(k, v) => updateDoc(doc.id, k, v)} />
+                <div key={doc.id} className="p-4 bg-white rounded-2xl shadow-sm border border-slate-200">
+                   <ItemFields value={doc.draft} onChange={(k, v) => updateDoc(doc.id, k, v)} />
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        <footer className="flex items-center justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:rounded-b-3xl">
-          <button
-            type="button"
-            disabled={!selected.length || busy}
-            onClick={save}
-            className="rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:opacity-50"
-          >
-            {busy ? "Guardando..." : "Guardar en Drive y Sheets"}
+        <footer className="p-5 border-t bg-white">
+          <button disabled={!selected.length || busy} onClick={save} className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold">
+            {busy ? "Guardando..." : "Guardar todo en Drive y Sheets"}
           </button>
         </footer>
       </div>
