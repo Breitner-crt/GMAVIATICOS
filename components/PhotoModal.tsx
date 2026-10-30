@@ -165,16 +165,12 @@ export default function PhotoModal({
             prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: true } : photo))
           );
         } else {
-          // 2. Si no tiene QR, usar el motor OCR local con Tesseract
-          const { text, doc } = await runLocalOcr(blob);
-          setDebugText(text);
-          addScannedDoc(doc, "ocr", url);
+          addScannedDoc({}, "manual", url);
           setPhotos((prev) =>
             prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: false } : photo))
           );
         }
       } catch (err) {
-        // Fallback a modo manual asistido si ocurre cualquier error
         addScannedDoc({}, "manual", url);
         setPhotos((prev) =>
           prev.map((photo) => (photo.id === id ? { ...photo, status: "done", hasQr: false } : photo))
@@ -248,9 +244,9 @@ export default function PhotoModal({
       <div className="flex max-h-[94vh] w-full max-w-2xl flex-col rounded-t-3xl bg-slate-50 sm:rounded-3xl">
         <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:rounded-t-3xl">
           <div>
-            <h2 className="text-base font-semibold">Capturar Comprobante o Factura</h2>
+            <h2 className="text-base font-semibold">Agregar Gasto</h2>
             <p className="text-xs text-slate-500">
-              Detección automática por QR (SAT) o lectura OCR local.
+              Detección por QR (SAT) o llenado manual.
             </p>
           </div>
           <button
@@ -347,7 +343,7 @@ export default function PhotoModal({
               <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round" />
               </svg>
-              Escaneando código QR o procesando factura...
+              Buscando código QR...
             </div>
           )}
 
@@ -370,11 +366,11 @@ export default function PhotoModal({
                     </label>
                     {doc.origen === "qr" ? (
                       <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 uppercase tracking-wide">
-                        ✓ Datos por QR (100% Exacto)
+                        ✓ Datos por QR (Exacto)
                       </span>
                     ) : (
-                      <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-bold text-amber-800 uppercase tracking-wide">
-                        ⚠️ OCR Local (Verificar datos)
+                      <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-bold text-slate-800 uppercase tracking-wide">
+                        📝 Llenado Manual
                       </span>
                     )}
                   </div>
