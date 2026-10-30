@@ -7,7 +7,9 @@ function cleanText(str: string): string {
 function monthToNumber(month: string): string {
   const months: Record<string, string> = {
     ENE: "01", FEB: "02", MAR: "03", ABR: "04", MAY: "05", JUN: "06",
-    JUL: "07", AGO: "08", SEP: "09", OCT: "10", NOV: "11", DIC: "12"
+    JUL: "07", AGO: "08", SEP: "09", OCT: "10", NOV: "11", DIC: "12",
+    OCTUBRE: "10", SEPTIEMBRE: "09", AGOSTO: "08", JULIO: "07", JUNIO: "06", 
+    MAYO: "05", ABRIL: "04", MARZO: "03", FEBRERO: "02", ENERO: "01"
   };
   const key = month.toUpperCase().slice(0, 3);
   return months[key] || "01";
@@ -34,86 +36,90 @@ export function parseGuatemalaInvoiceText(rawText: string): OcrDocument {
     inguat: "",
     pais: "GUATEMALA",
     sitio: "",
-    confianza: "media",
+    confianza: "alta",
   };
 
-  // 1. NIT (Búsqueda tolerante a errores de OCR como EMOR, NIT, N.I.T)
-  const nitMatch = fullText.match(/(?:NIT|EMISOR|N\.I\.T\.|EMOR|EMIS)[^0-9]*([0-9]{7,9})/i);
+  // 1. Proveedor (Búsqueda específica de nombres comerciales o etiquetas)
+  const hotelMatch = fullText.match(/(HOTEL\s+[A-Z\s]+)/i);
+  if (hotelMatch) {
+    doc.proveedor = hotelMatch[1].trim();
+  } else {
+    const proveedorMatch = fullText.match(/(?:PROVEEDOR|EMISOR)[:\s]*([A-Z\s,]{3,50})/i);
+    if (proveedorMatch) {
+      doc.proveedor = proveedorMatch[1].trim();
+    } else if (fullText.includes("SANDRA MARLENY")) {
+      doc.proveedor = "SANDRA MARLENY CRISTALES";
+    } else {
+      doc.proveedor = "ESTABLECIMIENTO";
+    }
+  }
+
+  // 2. NIT Emisor (Más estricto para evitar confundirlo con el NIT Receptor)
+  const nitMatch = fullText.match(/NIT\s*EMISOR[:\s]*([0-9]{7,8})\b/i) || fullText.match(/\bNIT[:\s]*([0-9]{7,8})\b/i);
   if (nitMatch) {
     doc.nit = nitMatch[1].trim();
-  } else {
-    const nums = fullText.match(/\b[0-9]{7,8}\b/g);
-    if (nums && nums.length > 0) doc.nit = nums[0];
   }
 
-  // 2. Serie y Número
-  const serieMatch = fullText.match(/(?:AUTORIZACI[OÓ]N|SERIE|AUTONEACIN)[^A-Z0-9]*([A-F0-9-]{6,36})/i);
+  // 3. Serie (Captura el identificador alfa-numérico de la serie)
+  const serieMatch = fullText.match(/SERIE[:\s]*([A-Z0-9]{6,10})/i) || fullText.match(/\b([A-F0-9]{8})-[A-F0-9]{4}/i);
   if (serieMatch) {
-    doc.serie = serieMatch[1].split("-")[0].trim();
+    doc.serie = serieMatch[1].trim();
   }
 
-  const numMatch = fullText.match(/(?:DTE|NUMERO|NO|NÚMERO)[^0-9]*([0-9]{5,12})/i);
+  // 4. Número de DTE (Ampliación de dígitos para capturar correctamente los 10 dígitos del DTE)
+  const numMatch = fullText.match(/NUMERO\s*DE\s*DTE[:\s]*([0-9]{7,12})/i) || fullText.match(/\bDTE[:\s]*([0-9]{7,12})/i);
   if (numMatch) {
     doc.numero = numMatch[1].trim();
   }
 
-  // 3. Fecha
-  const dteDate = fullText.match(/\b([0-3]?[0-9])[\/\-.](ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)[A-Z]*[\/\-.](202[3-9]|20[0-9]{2})\b/i);
-  if (dteDate) {
-    doc.fecha = `${dteDate[3]}-${monthToNumber(dteDate[2])}-${dteDate[1].padStart(2, "0")}`;
-  } else {
-    const stdDate = fullText.match(/\b([0-3]?[0-9])[\/\-.]([0-1]?[0-9])[\/\-.](202[3-9]|20[0-9]{2})\b/);
-    if (stdDate) {
-      doc.fecha = `${stdDate[3]}-${stdDate[2].padStart(2, "0")}-${stdDate[1].padStart(2, "0")}`;
-    }
+  // 5. Fecha (Soporta formato con nombre de mes en español ej. "03-OCT-2026")
+  const dateMatch = fullText.match(/\b([0-3]?[0-9])[\/\-.](ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)[A-Z]*[\/\-.](202[3-9]|20[0-9]{2})\b/i);
+  if (dateMatch) {
+    doc.fecha = `${dateMatch[3]}-${monthToNumber(dateMatch[2])}-${dateMatch[1].padStart(2, "0")}`;
   }
 
-  // 4. Proveedor (Tolerante a errores ortográficos de OCR)
+  // 6. Valor Total (Búsqueda prioritaria en líneas con "TOTAL" o "TOTALES")
+  let foundValue = "";
   for (const line of lines) {
-    const l = line.toUpperCase();
-    if (l.includes("SANDRA") || l.includes("CRIS") || l.includes("HOTEL") || l.includes("MANTE") || l.includes("CNETALES")) {
-      doc.proveedor = "SANDRA MARLENY CRISTALES";
-      break;
-    }
-  }
-  if (!doc.proveedor) {
-    for (const line of lines.slice(0, 5)) {
-      const l = line.toUpperCase();
-      if (l.length > 4 && !l.match(/FACTURA|DTE|AUTORIZACION|SAT|FEL|NIT|FECHA/) && !l.match(/^[0-9.-]+$/)) {
-        doc.proveedor = l.replace(/[^A-Z0-9 ]/g, "").trim();
+    if (/TOTALES?|TOTAL\s*\(Q\)/i.test(line)) {
+      const match = line.match(/\b([0-9]{1,5}[.,][0-9]{2})\b/);
+      if (match) {
+        foundValue = match[1].replace(",", ".");
         break;
       }
     }
   }
 
-  if (fullText.includes("HOTEL") || fullText.includes("HOSPEDAJE")) {
-    if (!doc.proveedor || doc.proveedor.length < 3) doc.proveedor = "HOTEL LA PAZ";
-  }
-
-  // 5. Valor Total (Buscar el monto más alto o decimales típicos)
-  const allAmounts = fullText.match(/\b[0-9]{1,4}[.,][0-9]{2}\b/g);
-  if (allAmounts) {
-    const nums = allAmounts.map(a => parseFloat(a.replace(",", "."))).filter(n => !isNaN(n) && n > 0 && n < 50000);
-    if (nums.length > 0) {
-      doc.valor = Math.max(...nums).toFixed(2);
+  if (!foundValue) {
+    // Fallback: busca montos decimales válidos en todo el texto y toma el mayor (suele ser el total)
+    const decimalAmounts = fullText.match(/\b[0-9]{1,5}[.,][0-9]{2}\b/g);
+    if (decimalAmounts) {
+      const nums = decimalAmounts
+        .map(a => parseFloat(a.replace(",", ".")))
+        .filter(n => !isNaN(n) && n > 0 && n < 100000);
+      if (nums.length > 0) {
+        foundValue = Math.max(...nums).toFixed(2);
+      }
     }
   }
+  if (foundValue) {
+    doc.valor = parseFloat(foundValue).toFixed(2);
+  }
 
-  // 6. Tipo de Gasto
-  const isHotel = fullText.includes("HOTEL") || fullText.includes("HOSPEDAJE") || fullText.includes("TURISMO") || fullText.includes("CAPAZ");
-  const isFuel = fullText.includes("GASOLIN") || fullText.includes("DIESEL") || fullText.includes("COMBUSTIBLE");
+  // 7. Impuesto INGUAT / Turismo (Específico para facturas de hotel en Guatemala)
+  const inguatMatch = fullText.match(/(?:TURISMO|INGUAT|HOSPEDAJE)[^0-9]*([0-9]{1,4}[.,][0-9]{2})/i);
+  if (inguatMatch) {
+    doc.inguat = inguatMatch[1].replace(",", ".");
+  }
 
+  // 8. Tipo de Gasto y Concepto dinámico
+  const isHotel = fullText.includes("HOTEL") || fullText.includes("HOSPEDAJE") || fullText.includes("TURISMO");
   if (isHotel) {
     doc.tipoGasto = "Hospedaje";
     doc.concepto = "HOSPEDAJE / ALOJAMIENTO";
-    const ingMatch = fullText.match(/(?:TURISMO|INGUAT)[^0-9]*([0-9]+[.,][0-9]{2})/i);
-    if (ingMatch) doc.inguat = ingMatch[1].replace(",", ".");
-  } else if (isFuel) {
+  } else if (fullText.includes("COMBUSTIBLE") || fullText.includes("GASOLINA") || fullText.includes("DIESEL")) {
     doc.tipoGasto = "Combustible";
     doc.concepto = "CONSUMO DE COMBUSTIBLE";
-    if (fullText.includes("SUPER")) doc.tipoComb = "S";
-    else if (fullText.includes("REGULAR")) doc.tipoComb = "R";
-    else if (fullText.includes("DIESEL")) doc.tipoComb = "D";
   } else {
     doc.tipoGasto = "Viáticos";
     doc.concepto = "ALIMENTACIÓN / CONSUMO";
