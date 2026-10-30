@@ -11,8 +11,8 @@ export async function runLocalOcr(imageBlob: Blob): Promise<OcrResult> {
   formData.append("file", imageBlob, "invoice.jpg");
 
   try {
-    // Conectando al túnel de Serveo que apunta a tu EasyOCR local
-    const response = await fetch("https://2f486467a8dd398b-200-119-178-205.serveousercontent.com/ocr", {
+    // Conectando al nuevo túnel de Serveo que apunta a tu EasyOCR local
+    const response = await fetch("https://08a3374ae3a08068-200-119-178-205.serveousercontent.com/ocr", {
       method: "POST",
       body: formData,
     });
