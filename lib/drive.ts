@@ -35,6 +35,14 @@ function driveError(status: number, payload: unknown): Error {
       : undefined;
   const detail = raw || `Error ${status} de Google Drive`;
 
+  if (/has not been used in project|it is disabled|accessNotConfigured|drive\.googleapis\.com.*disabled/i.test(detail)) {
+    const link = detail.match(/https:\/\/console\.developers\.google\.com\/apis\/api\/[^\s]+/)?.[0];
+    return new Error(
+      `La API de Google Drive está desactivada en tu proyecto de Google Cloud. Actívala aquí: ${
+        link ?? "https://console.cloud.google.com/apis/library/drive.googleapis.com"
+      } — espera de 2 a 5 minutos y vuelve a intentar.`
+    );
+  }
   if (/storage quota/i.test(detail)) {
     return new Error(
       "Google Drive no acepta archivos de la cuenta de servicio (sin cuota). Usa una Unidad compartida de Google Workspace y compártela con la cuenta de servicio."
