@@ -158,9 +158,10 @@ export default function PhotoModal({
 
   async function saveAll() {
     setBusy(true);
+    setError(null);
     try {
       for (const doc of selected) {
-        await api<SheetData>("/api/items", {
+        const result = await api<SheetData & { warning?: string }>("/api/items", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ 
@@ -168,10 +169,15 @@ export default function PhotoModal({
             photoBase64: doc.photoBase64 
           }),
         });
+        if (result.warning) {
+          setError(result.warning);
+          setBusy(false);
+          return;
+        }
       }
       onClose();
     } catch (err) {
-      setError("Error al guardar en Google Drive y Sheets.");
+      setError(err instanceof Error ? err.message : "Error al guardar en Google Drive y Sheets.");
     } finally {
       setBusy(false);
     }

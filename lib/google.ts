@@ -56,7 +56,7 @@ export async function getAccessToken(): Promise<string> {
 
   const unsigned = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({
     iss: account.client_email,
-    scope: "https://www.googleapis.com/auth/spreadsheets",
+    scope: "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive",
     aud: tokenUri,
     iat: now,
     exp: now + 3600,

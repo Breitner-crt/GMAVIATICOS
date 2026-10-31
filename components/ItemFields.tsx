@@ -102,7 +102,7 @@ const FIELDS: FieldDef[] = [
   },
   { key: "inguat", label: "INGUAT (Q)", type: "number", inputMode: "decimal" },
   { key: "pais", label: "País", type: "text" },
-  { key: "sitio", label: "Sitio", type: "text" },
+  { key: "sitio", label: "Sitio / enlace de foto", type: "text" },
 ];
 
 type Props = {
