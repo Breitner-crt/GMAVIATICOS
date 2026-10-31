@@ -31,7 +31,7 @@ import type { HeaderData, Item, ItemFieldKey, SheetData } from "./types";
 export type DataSource = "sheets" | "webhook" | "demo";
 
 type CellValue = string | number;
-type Update = { range: string; values: CellValue[][] };
+export type Update = { range: string; values: CellValue[][] };
 type Config = { sheetId: string; tab: string };
 
 /** Cookie con la hoja activa: permite cambiar de hoja sin redesplegar. */
@@ -169,6 +169,37 @@ async function batchUpdate(config: Config, updates: Update[]) {
       data: updates,
     }),
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Acceso de bajo nivel para otros módulos (Alimentación)              */
+/* ------------------------------------------------------------------ */
+
+/** ID de la hoja activa (la misma que usa el formato de liquidación). */
+export async function activeSheetId(): Promise<string> {
+  return (await sheetConfig()).sheetId;
+}
+
+/** Llamada directa a la API de Google Sheets. */
+export async function sheetFetch(sheetId: string, path: string, init?: RequestInit) {
+  return googleFetch(sheetId, path, init);
+}
+
+/** Escribe celdas en la hoja indicada con valueInputOption USER_ENTERED. */
+export async function sheetBatchUpdate(sheetId: string, updates: Update[]) {
+  if (!updates.length) return;
+  await googleFetch(sheetId, `/values:batchUpdate`, {
+    method: "POST",
+    body: JSON.stringify({
+      valueInputOption: "USER_ENTERED",
+      data: updates,
+    }),
+  });
+}
+
+/** sheetId numérico de una pestaña. */
+export async function sheetTabId(sheetId: string, tab: string): Promise<number> {
+  return tabSheetId({ sheetId, tab });
 }
 
 /* ------------------------------------------------------------------ */

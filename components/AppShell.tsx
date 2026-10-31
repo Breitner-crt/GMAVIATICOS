@@ -7,8 +7,9 @@ import { api, formatDate, money } from "@/lib/client";
 import ItemFields, { EMPTY_DRAFT, draftFromItem, type ItemDraft } from "./ItemFields";
 import PhotoUpload, { type UploadedPhoto } from "./PhotoUpload";
 import NewLiquidation from "./NewLiquidation";
+import Alimentacion from "./Alimentacion";
 
-type Tab = "form" | "items" | "totals";
+type Tab = "form" | "items" | "totals" | "alimentacion";
 
 type Props = {
   initial: SheetData;
@@ -562,6 +563,7 @@ export default function AppShell({ initial }: Props) {
             </button>
           </div>
         )}
+        {tab === "alimentacion" && <Alimentacion />}
       </main>
 
       <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 backdrop-blur">
@@ -569,6 +571,7 @@ export default function AppShell({ initial }: Props) {
           <TabButton active={tab === "form"} onClick={() => setTab("form")} label="Formulario" icon="form" />
           <TabButton active={tab === "items"} onClick={() => setTab("items")} label={`Gastos (${usedItems.length})`} icon="receipt" />
           <TabButton active={tab === "totals"} onClick={() => setTab("totals")} label="Totales" icon="chart" />
+          <TabButton active={tab === "alimentacion"} onClick={() => setTab("alimentacion")} label="Alimentación" icon="meal" />
         </div>
       </nav>
 
@@ -723,12 +726,13 @@ function TabButton({
   active: boolean;
   onClick: () => void;
   label: string;
-  icon: "form" | "receipt" | "chart";
+  icon: "form" | "receipt" | "chart" | "meal";
 }) {
   const paths: Record<typeof icon, string> = {
     form: "M7 4h7l4 4v12H7V4Zm7 0v4h4M10 12h6M10 16h6",
     receipt: "M6 3h12v18l-3-2-3 2-3-2-3 2V3Zm3 5h6M9 12h6",
     chart: "M5 19V9m5 10V5m5 14v-7m5 7V8",
+    meal: "M4 11h16a8 8 0 0 1-16 0ZM8 7c0-1 1-1.5 1-2.5M12 7c0-1 1-1.5 1-2.5M16 7c0-1 1-1.5 1-2.5",
   };
 
   return (

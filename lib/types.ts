@@ -169,3 +169,56 @@ export type OcrDocument = {
   sitio: string;
   confianza: "alta" | "media" | "baja";
 };
+
+/* ------------------------------------------------------------------ */
+/* Alimentación (pestaña ALIMENTACION GMA)                             */
+/* ------------------------------------------------------------------ */
+
+export type MealKey = "desayuno" | "almuerzo" | "cena";
+
+export const MEAL_KEYS: MealKey[] = ["desayuno", "almuerzo", "cena"];
+
+export const MEAL_LABELS: Record<MealKey, string> = {
+  desayuno: "Desayunos",
+  almuerzo: "Almuerzos",
+  cena: "Cenas",
+};
+
+/** Un día de la malla de 35 días (5 semanas × 7 días) de cada tiempo. */
+export type MealDay = {
+  /** Posición 0..34 dentro del bloque. */
+  index: number;
+  /** Fecha YYYY-MM-DD calculada por el Sheet (vacía si no hay fecha inicial). */
+  date: string;
+  /** Cantidad de la cuadrilla (texto para permitir el campo vacío). */
+  cuadrilla: string;
+  /** Cantidad del supervisor. */
+  supervisor: string;
+};
+
+export type MealBlock = {
+  key: MealKey;
+  label: string;
+  /** Primera fecha del bloque (la única que se escribe; el resto son fórmulas). */
+  startDate: string;
+  costCuadrilla: number | null;
+  costSupervisor: number | null;
+  days: MealDay[];
+  /** Cantidades totales del bloque (fórmulas A3/A4 del Sheet). */
+  totalCuadrilla: number;
+  totalSupervisor: number;
+  /** Costo total del bloque (F3 + F4). */
+  total: number;
+};
+
+export type AlimentacionData = {
+  meals: Record<MealKey, MealBlock>;
+  workers: string[];
+  supervisor: string;
+  meta: {
+    sheetId: string;
+    tab: string;
+    source: "sheets" | "webhook" | "demo";
+    updatedAt: string;
+  };
+};
