@@ -45,7 +45,7 @@ function driveError(status: number, payload: unknown): Error {
   }
   if (/storage quota/i.test(detail)) {
     return new Error(
-      "Google Drive no acepta archivos de la cuenta de servicio (sin cuota). Usa una Unidad compartida de Google Workspace y compártela con la cuenta de servicio."
+      "La cuenta de servicio no tiene cuota de Google Drive. Configura el puente PHOTO_UPLOAD_URL (apps-script/PhotoUpload.gs) para guardar las fotos con tu propia cuenta."
     );
   }
   if (status === 404) {
@@ -72,6 +72,51 @@ async function driveFetch(url: string, init: RequestInit, token: string) {
 }
 
 /**
+ * Sube la foto usando el puente de Apps Script (PHOTO_UPLOAD_URL), que guarda
+ * el archivo con la cuenta del dueño del Drive (sí tiene cuota).
+ */
+async function uploadViaAppsScript(
+  base64Data: string,
+  name: string,
+  mimeType: string
+): Promise<DriveUpload> {
+  const url = process.env.PHOTO_UPLOAD_URL?.trim();
+  if (!url) throw new Error("Falta PHOTO_UPLOAD_URL.");
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({
+      token: process.env.PHOTO_UPLOAD_TOKEN?.trim() ?? "",
+      filename: name,
+      mimeType,
+      data: base64Data.replace(DATA_URL, ""),
+    }),
+    cache: "no-store",
+    redirect: "follow",
+  });
+
+  const text = await res.text();
+  let payload: unknown = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `El puente de fotos no devolvió JSON (${res.status}). Revisa que la implementación esté publicada con acceso "Cualquier persona".`
+    );
+  }
+
+  const data = payload as { ok?: boolean; error?: string; id?: string; name?: string; url?: string };
+  if (!res.ok || data.ok === false || !data.url) {
+    throw new Error(
+      `El puente de fotos rechazó la subida: ${data.error || `respuesta ${res.status}`}`
+    );
+  }
+
+  return { id: data.id ?? "", name: data.name ?? name, url: data.url };
+}
+
+/**
  * Sube una imagen (data URL o base64 puro) a la carpeta configurada en
  * GOOGLE_DRIVE_FOLDER_ID y devuelve el enlace público de visualización.
  */
@@ -79,10 +124,6 @@ export async function uploadImageToDrive(
   base64Data: string,
   filename?: string
 ): Promise<DriveUpload> {
-  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID?.trim();
-  if (!folderId) {
-    throw new Error("Falta configurar GOOGLE_DRIVE_FOLDER_ID en Vercel.");
-  }
   if (!base64Data) {
     throw new Error("No se recibió la fotografía.");
   }
@@ -92,11 +133,22 @@ export async function uploadImageToDrive(
     throw new Error("La fotografía llegó vacía o dañada.");
   }
 
-  const token = await getAccessToken();
   const cleanName = filename?.trim().replace(/[\\/:*?"<>|]/g, "-").slice(0, 80);
   const name = cleanName
     ? `${cleanName}.${extensionFor(mimeType)}`
     : `factura_${stamp()}.${extensionFor(mimeType)}`;
+
+  // Preferimos el puente de Apps Script: usa la cuota del dueño del Drive.
+  if (process.env.PHOTO_UPLOAD_URL?.trim()) {
+    return uploadViaAppsScript(base64Data, name, mimeType);
+  }
+
+  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID?.trim();
+  if (!folderId) {
+    throw new Error("Falta configurar GOOGLE_DRIVE_FOLDER_ID en Vercel.");
+  }
+
+  const token = await getAccessToken();
 
   const form = new FormData();
   form.append(

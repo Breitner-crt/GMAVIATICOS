@@ -10,9 +10,10 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: Request) {
   try {
-    if (!hasServiceAccount()) {
+    const bridge = process.env.PHOTO_UPLOAD_URL?.trim();
+    if (!bridge && !hasServiceAccount()) {
       throw new Error(
-        "Falta configurar GOOGLE_SERVICE_ACCOUNT_JSON en Vercel para subir fotos a Google Drive."
+        "Falta configurar PHOTO_UPLOAD_URL (puente de fotos) o GOOGLE_SERVICE_ACCOUNT_JSON en Vercel."
       );
     }
 
