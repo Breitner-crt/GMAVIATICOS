@@ -50,12 +50,6 @@ const HEADER_GROUPS: { title: string; hint?: string; fields: HeaderField[] }[] =
   },
 ];
 
-const SOURCE_LABEL: Record<SheetData["meta"]["source"], string> = {
-  demo: "Demostración",
-  sheets: "Google Sheets",
-  webhook: "Apps Script",
-};
-
 export default function AppShell({ initial }: Props) {
   const [data, setData] = useState<SheetData>(initial);
   const [tab, setTab] = useState<Tab>("items");
@@ -253,7 +247,6 @@ export default function AppShell({ initial }: Props) {
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-            <span className="chip bg-white/15 text-white">{SOURCE_LABEL[data.meta.source]}</span>
             <span className="chip bg-white/10 text-brand-50">
               {usedItems.length}/{data.meta.capacity} gastos
             </span>
