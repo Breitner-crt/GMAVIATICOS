@@ -222,3 +222,17 @@ export type AlimentacionData = {
     updatedAt: string;
   };
 };
+
+/** Pestaña de alimentación: la de trabajo o una archivada. */
+export type AlimentacionTab = {
+  title: string;
+  sheetId: number;
+  index: number;
+  /** true si es una pestaña archivada (no la de trabajo). */
+  archived: boolean;
+};
+
+export type AlimentacionTabs = {
+  working: string;
+  tabs: AlimentacionTab[];
+};

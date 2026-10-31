@@ -1,6 +1,8 @@
 import {
   archiveAlimentacion,
+  listAlimentacionTabs,
   readAlimentacion,
+  restoreAlimentacion,
   saveAlimentacionDay,
   saveAlimentacionNames,
   saveAlimentacionSetup,
@@ -11,9 +13,14 @@ import type { MealKey } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    return Response.json(await readAlimentacion());
+    const url = new URL(request.url);
+    if (url.searchParams.get("list") === "1") {
+      return Response.json(await listAlimentacionTabs());
+    }
+    const tab = url.searchParams.get("tab")?.trim() || undefined;
+    return Response.json(await readAlimentacion(tab));
   } catch (error) {
     return jsonError(error);
   }
@@ -36,6 +43,7 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as Record<string, unknown>;
     const action = String(body.action ?? "");
+    const tab = String(body.tab ?? "").trim() || undefined;
 
     if (action === "day") {
       return Response.json(
@@ -44,6 +52,7 @@ export async function POST(request: Request) {
           index: Number(body.index),
           cuadrilla: String(body.cuadrilla ?? ""),
           supervisor: String(body.supervisor ?? ""),
+          tab,
         })
       );
     }
@@ -60,6 +69,7 @@ export async function POST(request: Request) {
           costSupervisor: has("costSupervisor")
             ? optionalNumber(body.costSupervisor)
             : undefined,
+          tab,
         })
       );
     }
@@ -69,12 +79,19 @@ export async function POST(request: Request) {
         await saveAlimentacionNames({
           workers: Array.isArray(body.workers) ? body.workers.map(String) : [],
           supervisor: String(body.supervisor ?? ""),
+          tab,
         })
       );
     }
 
     if (action === "archive") {
       return Response.json(await archiveAlimentacion());
+    }
+
+    if (action === "restore") {
+      return Response.json(
+        await restoreAlimentacion(String(body.sourceTab ?? ""))
+      );
     }
 
     throw new Error("Acción no reconocida.");

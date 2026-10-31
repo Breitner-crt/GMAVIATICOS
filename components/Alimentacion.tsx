@@ -3,7 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, formatDate, money } from "@/lib/client";
 import { MEAL_KEYS, MEAL_LABELS } from "@/lib/types";
-import type { AlimentacionData, MealKey } from "@/lib/types";
+import type {
+  AlimentacionData,
+  AlimentacionTab,
+  AlimentacionTabs,
+  MealKey,
+} from "@/lib/types";
 
 type DayDraft = { cuadrilla: string; supervisor: string };
 type Toast = { text: string; type: "ok" | "error" };
@@ -65,8 +70,14 @@ export default function Alimentacion() {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
 
+  const [tabs, setTabs] = useState<AlimentacionTab[]>([]);
+  const [workingTab, setWorkingTab] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+  const [openingTab, setOpeningTab] = useState<string | null>(null);
+
   useEffect(() => {
-    void load();
+    void init();
   }, []);
 
   useEffect(() => {
@@ -105,10 +116,21 @@ export default function Alimentacion() {
     });
   }
 
-  async function load() {
+  async function loadTabs() {
+    try {
+      const list = await api<AlimentacionTabs>("/api/alimentacion?list=1");
+      setTabs(list.tabs);
+      setWorkingTab(list.working);
+    } catch {
+      /* el historial no bloquea la pestaña actual */
+    }
+  }
+
+  async function init() {
     setLoading(true);
     setError(null);
     try {
+      await loadTabs();
       hydrate(await api<AlimentacionData>("/api/alimentacion"));
     } catch (err) {
       setError(
@@ -116,6 +138,31 @@ export default function Alimentacion() {
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function openTab(title: string) {
+    if (openingTab) return;
+    if (data?.meta.tab === title) {
+      setHistoryOpen(false);
+      return;
+    }
+    setOpeningTab(title);
+    try {
+      const next = await api<AlimentacionData>(
+        `/api/alimentacion?tab=${encodeURIComponent(title)}`
+      );
+      hydrate(next);
+      setHistoryOpen(false);
+      notify(
+        next.meta.tab === workingTab
+          ? "Pestaña de trabajo abierta."
+          : `Liquidación archivada «${next.meta.tab}» abierta.`
+      );
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "No se pudo abrir la pestaña.", "error");
+    } finally {
+      setOpeningTab(null);
     }
   }
 
@@ -150,6 +197,7 @@ export default function Alimentacion() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "day",
+          tab: data.meta.tab,
           meal: key,
           index,
           cuadrilla: draft.cuadrilla,
@@ -183,6 +231,7 @@ export default function Alimentacion() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "setup",
+          tab: data.meta.tab,
           meal,
           startDate: dateDraft[meal],
           costCuadrilla:
@@ -209,6 +258,7 @@ export default function Alimentacion() {
   }
 
   async function saveNames() {
+    if (!data) return;
     const workers = workersText
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -221,6 +271,7 @@ export default function Alimentacion() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "names",
+          tab: data.meta.tab,
           workers,
           supervisor: supervisorText,
         }),
@@ -255,9 +306,10 @@ export default function Alimentacion() {
         }
       );
       hydrate(result.data);
+      await loadTabs();
       notify(
         result.archivedAs
-          ? `Periodo archivado como «${result.archivedAs}».`
+          ? `Periodo archivado como «${result.archivedAs}». Puedes abrirlo desde el historial.`
           : "Pestaña limpia para un periodo nuevo."
       );
     } catch (err) {
@@ -267,7 +319,42 @@ export default function Alimentacion() {
     }
   }
 
+  async function restore() {
+    if (!data) return;
+    const source = data.meta.tab;
+    if (
+      !window.confirm(
+        `Se copiará «${source}» a la pestaña de trabajo para seguir llenándola. Si la pestaña de trabajo tiene datos, se archivará antes para no perderlos. ¿Continuar?`
+      )
+    ) {
+      return;
+    }
+    setBusy("restore");
+    try {
+      const result = await api<{ data: AlimentacionData; archivedAs: string }>(
+        "/api/alimentacion",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "restore", sourceTab: source }),
+        }
+      );
+      hydrate(result.data);
+      await loadTabs();
+      notify(
+        result.archivedAs
+          ? `Liquidación restaurada. La pestaña anterior se archivó como «${result.archivedAs}».`
+          : "Liquidación restaurada en la pestaña de trabajo."
+      );
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "No se pudo restaurar.", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const block = data?.meals[meal] ?? null;
+  const isArchived = Boolean(data && workingTab && data.meta.tab !== workingTab);
 
   const workersParsed = useMemo(
     () =>
@@ -289,6 +376,13 @@ export default function Alimentacion() {
       costDraft[meal].supervisor !== numText(block.costSupervisor)
     : false;
 
+  const archivedTabs = useMemo(() => {
+    const query = historySearch.trim().toLowerCase();
+    return tabs.filter(
+      (tab) => tab.archived && (!query || tab.title.toLowerCase().includes(query))
+    );
+  }, [tabs, historySearch]);
+
   if (loading) {
     return (
       <div className="card px-4 py-10 text-center">
@@ -302,7 +396,7 @@ export default function Alimentacion() {
       <div className="card space-y-3 px-4 py-6 text-center">
         <p className="text-sm font-semibold text-red-700">No se pudo abrir Alimentación</p>
         <p className="text-xs text-slate-600">{error}</p>
-        <button type="button" onClick={load} className="btn-secondary">
+        <button type="button" onClick={init} className="btn-secondary">
           Reintentar
         </button>
       </div>
@@ -317,21 +411,56 @@ export default function Alimentacion() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-slate-900">Alimentación</h2>
-            <p className="mt-0.5 truncate text-xs text-slate-500">{data.meta.tab}</p>
+            <p className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-slate-500">
+              <span className="truncate">{data.meta.tab}</span>
+              {isArchived && (
+                <span className="chip shrink-0 bg-amber-100 text-amber-800">Archivada</span>
+              )}
+            </p>
           </div>
-          <button
-            type="button"
-            onClick={load}
-            disabled={busy !== null}
-            className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 disabled:opacity-50"
-            aria-label="Recargar alimentación"
-            title="Recargar desde el Sheet"
-          >
-            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              disabled={busy !== null}
+              className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 disabled:opacity-50"
+              aria-label="Liquidaciones anteriores"
+              title="Ver liquidaciones anteriores"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M12 8v4l3 2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1M3.5 4v4h4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={init}
+              disabled={busy !== null}
+              className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 disabled:opacity-50"
+              aria-label="Recargar alimentación"
+              title="Recargar desde el Sheet"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
         </div>
+
+        {isArchived && (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
+            <p className="font-semibold">Estás editando una liquidación archivada.</p>
+            <p className="mt-0.5">Los cambios se guardan directamente en esa pestaña.</p>
+            <button
+              type="button"
+              onClick={() => openTab(workingTab)}
+              disabled={openingTab !== null}
+              className="mt-2 rounded-lg bg-white px-2.5 py-1.5 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200 disabled:opacity-50"
+            >
+              Volver a la pestaña de trabajo
+            </button>
+          </div>
+        )}
 
         <div className="mt-3 grid grid-cols-3 gap-2">
           {MEAL_KEYS.map((key) => {
@@ -562,21 +691,158 @@ export default function Alimentacion() {
         </p>
       </section>
 
-      <section className="card space-y-3 p-4">
-        <h3 className="text-sm font-semibold text-slate-800">Archivar periodo</h3>
-        <p className="text-xs text-slate-500">
-          Guarda una copia de esta pestaña con los datos del periodo y deja las cantidades
-          y los nombres en blanco. Los costos y las fechas se conservan.
-        </p>
-        <button
-          type="button"
-          onClick={archive}
-          disabled={busy === "archive"}
-          className="btn-secondary w-full"
-        >
-          {busy === "archive" ? "Archivando…" : "Archivar y dejar limpia"}
-        </button>
-      </section>
+      {isArchived ? (
+        <section className="card space-y-3 p-4">
+          <h3 className="text-sm font-semibold text-slate-800">Continuar en la pestaña de trabajo</h3>
+          <p className="text-xs text-slate-500">
+            Copia esta liquidación archivada a la pestaña de trabajo para seguir llenándola
+            como la actual. Si la pestaña de trabajo tiene datos, se archiva primero.
+          </p>
+          <button
+            type="button"
+            onClick={restore}
+            disabled={busy === "restore"}
+            className="btn-primary w-full"
+          >
+            {busy === "restore" ? "Restaurando…" : "Restaurar en la pestaña de trabajo"}
+          </button>
+        </section>
+      ) : (
+        <section className="card space-y-3 p-4">
+          <h3 className="text-sm font-semibold text-slate-800">Archivar periodo</h3>
+          <p className="text-xs text-slate-500">
+            Guarda una copia de esta pestaña con los datos del periodo y deja las cantidades
+            y los nombres en blanco. Los costos y las fechas se conservan. Después puedes
+            abrirla desde el historial para consultarla o volver a llenarla.
+          </p>
+          <button
+            type="button"
+            onClick={archive}
+            disabled={busy === "archive"}
+            className="btn-secondary w-full"
+          >
+            {busy === "archive" ? "Archivando…" : "Archivar y dejar limpia"}
+          </button>
+        </section>
+      )}
+
+      {historyOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 backdrop-blur-sm sm:items-center sm:p-6">
+          <div className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-t-3xl bg-white sm:rounded-3xl">
+            <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold">Liquidaciones de alimentación</h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Busca una pestaña archivada para consultarla o volver a llenarla.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                className="rounded-full p-2 text-slate-500 hover:bg-slate-100"
+                aria-label="Cerrar"
+              >
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
+                </svg>
+              </button>
+            </header>
+
+            <div className="border-b border-slate-100 px-4 py-3">
+              <input
+                type="search"
+                className="field-input"
+                placeholder="Buscar por fecha o nombre (ej. 2026-11)"
+                value={historySearch}
+                onChange={(event) => setHistorySearch(event.target.value)}
+              />
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-4 py-3">
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                Pestaña de trabajo
+              </p>
+              {tabs
+                .filter((tab) => !tab.archived)
+                .map((tab) => (
+                  <button
+                    key={tab.title}
+                    type="button"
+                    onClick={() => openTab(tab.title)}
+                    disabled={openingTab !== null}
+                    className={`mb-1 flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-left transition disabled:opacity-60 ${
+                      data.meta.tab === tab.title
+                        ? "border-brand-300 bg-brand-50"
+                        : "border-slate-200 bg-white hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold text-slate-800">
+                        {tab.title}
+                      </span>
+                      <span className="block text-[11px] text-slate-500">
+                        Pestaña donde se llena el periodo actual
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-[11px] font-semibold text-brand-700">
+                      {data.meta.tab === tab.title
+                        ? "Actual"
+                        : openingTab === tab.title
+                          ? "Abriendo…"
+                          : "Abrir"}
+                    </span>
+                  </button>
+                ))}
+
+              <p className="mb-2 mt-4 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                Archivadas ({archivedTabs.length})
+              </p>
+
+              {archivedTabs.length === 0 && (
+                <div className="rounded-xl border border-dashed border-slate-200 px-3 py-6 text-center">
+                  <p className="text-xs text-slate-500">
+                    {tabs.some((tab) => tab.archived)
+                      ? "No hay liquidaciones que coincidan con la búsqueda."
+                      : "Todavía no hay liquidaciones archivadas."}
+                  </p>
+                </div>
+              )}
+
+              <div className="space-y-1">
+                {archivedTabs.map((tab) => (
+                  <button
+                    key={tab.title}
+                    type="button"
+                    onClick={() => openTab(tab.title)}
+                    disabled={openingTab !== null}
+                    className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-left transition disabled:opacity-60 ${
+                      data.meta.tab === tab.title
+                        ? "border-amber-300 bg-amber-50"
+                        : "border-slate-200 bg-white hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold text-slate-800">
+                        {tab.title}
+                      </span>
+                      <span className="block text-[11px] text-slate-500">
+                        Archivada · se puede abrir y editar
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-[11px] font-semibold text-amber-700">
+                      {data.meta.tab === tab.title
+                        ? "Actual"
+                        : openingTab === tab.title
+                          ? "Abriendo…"
+                          : "Abrir"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div

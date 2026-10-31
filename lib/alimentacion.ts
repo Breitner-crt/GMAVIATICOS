@@ -8,7 +8,14 @@ import {
 } from "./sheets";
 import { cellText, looksLikeSerial, serialToDate } from "./schema";
 import { MEAL_KEYS } from "./types";
-import type { AlimentacionData, MealBlock, MealDay, MealKey } from "./types";
+import type {
+  AlimentacionData,
+  AlimentacionTab,
+  AlimentacionTabs,
+  MealBlock,
+  MealDay,
+  MealKey,
+} from "./types";
 
 /**
  * Pestaña de alimentación dentro del mismo archivo de Google Sheets.
@@ -103,16 +110,16 @@ const COL_INDEX: Record<string, number> = {
   J: 9,
 };
 
-function quotedRange(a1Range: string): string {
-  return `'${ALIMENTACION_TAB}'!${a1Range}`;
+function quotedRange(tab: string, a1Range: string): string {
+  return `'${tab}'!${a1Range}`;
 }
 
 /* ------------------------------------------------------------------ */
 /* Lectura                                                             */
 /* ------------------------------------------------------------------ */
 
-async function readGrid(sheetId: string): Promise<unknown[][]> {
-  const range = encodeURIComponent(quotedRange(`A1:J${GRID_ROWS}`));
+async function readGrid(sheetId: string, tab: string): Promise<unknown[][]> {
+  const range = encodeURIComponent(quotedRange(tab, `A1:J${GRID_ROWS}`));
   const data = (await sheetFetch(
     sheetId,
     `/values/${range}?valueRenderOption=UNFORMATTED_VALUE&majorDimension=ROWS`
@@ -237,6 +244,7 @@ function parseNames(grid: unknown[][]): { workers: string[]; supervisor: string 
 function buildData(
   grid: unknown[][],
   sheetId: string,
+  tab: string,
   source: AlimentacionData["meta"]["source"]
 ): AlimentacionData {
   const { workers, supervisor } = parseNames(grid);
@@ -246,7 +254,7 @@ function buildData(
     supervisor,
     meta: {
       sheetId,
-      tab: ALIMENTACION_TAB,
+      tab,
       source,
       updatedAt: new Date().toISOString(),
     },
@@ -348,12 +356,60 @@ function requireSheets() {
   }
 }
 
-export async function readAlimentacion(): Promise<AlimentacionData> {
+export async function readAlimentacion(
+  tab: string = ALIMENTACION_TAB
+): Promise<AlimentacionData> {
   if (dataSource() === "demo") return demoData();
   requireSheets();
   const sheetId = await activeSheetId();
-  const grid = await readGrid(sheetId);
-  return buildData(grid, sheetId, "sheets");
+  const grid = await readGrid(sheetId, tab);
+  return buildData(grid, sheetId, tab, "sheets");
+}
+
+/** Pestaña de trabajo + pestañas archivadas (ALIM …), las más recientes primero. */
+export async function listAlimentacionTabs(): Promise<AlimentacionTabs> {
+  if (dataSource() === "demo") {
+    return {
+      working: ALIMENTACION_TAB,
+      tabs: [{ title: ALIMENTACION_TAB, sheetId: 0, index: 0, archived: false }],
+    };
+  }
+
+  requireSheets();
+  const sheetId = await activeSheetId();
+  const meta = (await sheetFetch(sheetId, "?fields=sheets.properties(sheetId,title,index)")) as {
+    sheets?: { properties?: { sheetId?: number; title?: string; index?: number } }[];
+  };
+
+  const all = (meta.sheets ?? [])
+    .map((sheet) => sheet.properties)
+    .filter((props): props is { sheetId?: number; title?: string; index?: number } =>
+      Boolean(props)
+    );
+
+  const workingProps = all.find((props) => props.title === ALIMENTACION_TAB);
+  const working: AlimentacionTab = {
+    title: ALIMENTACION_TAB,
+    sheetId: workingProps?.sheetId ?? 0,
+    index: workingProps?.index ?? 0,
+    archived: false,
+  };
+
+  const archives = all
+    .flatMap((props): AlimentacionTab[] => {
+      if (typeof props.title !== "string" || !props.title.startsWith("ALIM ")) return [];
+      return [
+        {
+          title: props.title,
+          sheetId: props.sheetId ?? 0,
+          index: props.index ?? 0,
+          archived: true,
+        },
+      ];
+    })
+    .sort((a, b) => b.title.localeCompare(a.title));
+
+  return { working: ALIMENTACION_TAB, tabs: [working, ...archives] };
 }
 
 export async function saveAlimentacionDay(input: {
@@ -361,6 +417,7 @@ export async function saveAlimentacionDay(input: {
   index: number;
   cuadrilla: string;
   supervisor: string;
+  tab?: string;
 }): Promise<AlimentacionData> {
   const def = BLOCK_BY_KEY[input.meal];
   if (!def) throw new Error("Tiempo de comida inválido.");
@@ -369,6 +426,8 @@ export async function saveAlimentacionDay(input: {
   if (!Number.isInteger(index) || index < 0 || index >= DAYS_PER_BLOCK) {
     throw new Error("Día fuera de rango.");
   }
+
+  const tab = input.tab?.trim() || ALIMENTACION_TAB;
 
   if (dataSource() === "demo") {
     const data = demoData();
@@ -384,16 +443,16 @@ export async function saveAlimentacionDay(input: {
 
   await write([
     {
-      range: quotedRange(`${col}${def.cuadrillaRows[week]}`),
+      range: quotedRange(tab, `${col}${def.cuadrillaRows[week]}`),
       values: [[qtyCell(input.cuadrilla)]],
     },
     {
-      range: quotedRange(`${col}${def.supervisorRows[week]}`),
+      range: quotedRange(tab, `${col}${def.supervisorRows[week]}`),
       values: [[qtyCell(input.supervisor)]],
     },
   ]);
 
-  return readAlimentacion();
+  return readAlimentacion(tab);
 }
 
 export async function saveAlimentacionSetup(input: {
@@ -401,9 +460,12 @@ export async function saveAlimentacionSetup(input: {
   startDate?: string;
   costCuadrilla?: number | null;
   costSupervisor?: number | null;
+  tab?: string;
 }): Promise<AlimentacionData> {
   const def = BLOCK_BY_KEY[input.meal];
   if (!def) throw new Error("Tiempo de comida inválido.");
+
+  const tab = input.tab?.trim() || ALIMENTACION_TAB;
 
   if (dataSource() === "demo") {
     const data = demoData();
@@ -419,35 +481,37 @@ export async function saveAlimentacionSetup(input: {
 
   if (input.startDate !== undefined) {
     updates.push({
-      range: quotedRange(`A${def.firstDateRow}`),
+      range: quotedRange(tab, `A${def.firstDateRow}`),
       values: [[String(input.startDate ?? "").slice(0, 10)]],
     });
   }
   if (input.costCuadrilla !== undefined) {
     updates.push({
-      range: quotedRange(def.costCuadrillaCell),
+      range: quotedRange(tab, def.costCuadrillaCell),
       values: [[input.costCuadrilla ?? ""]],
     });
   }
   if (input.costSupervisor !== undefined) {
     updates.push({
-      range: quotedRange(def.costSupervisorCell),
+      range: quotedRange(tab, def.costSupervisorCell),
       values: [[input.costSupervisor ?? ""]],
     });
   }
 
   await write(updates);
-  return readAlimentacion();
+  return readAlimentacion(tab);
 }
 
 export async function saveAlimentacionNames(input: {
   workers: string[];
   supervisor: string;
+  tab?: string;
 }): Promise<AlimentacionData> {
   const workers = (Array.isArray(input.workers) ? input.workers : [])
     .map((worker) => String(worker).trim())
     .filter(Boolean);
   const supervisor = String(input.supervisor ?? "").trim();
+  const tab = input.tab?.trim() || ALIMENTACION_TAB;
 
   if (dataSource() === "demo") {
     const data = demoData();
@@ -460,8 +524,8 @@ export async function saveAlimentacionNames(input: {
   const lines = ["TRABAJADORES", ...workers, "SUPERVISOR", supervisor];
   const values = Array.from({ length: GRID_ROWS }, (_, i) => [safeName(lines[i] ?? "")]);
 
-  await write([{ range: quotedRange(`J1:J${GRID_ROWS}`), values }]);
-  return readAlimentacion();
+  await write([{ range: quotedRange(tab, `J1:J${GRID_ROWS}`), values }]);
+  return readAlimentacion(tab);
 }
 
 /* ------------------------------------------------------------------ */
@@ -559,15 +623,100 @@ export async function archiveAlimentacion(): Promise<{
   for (const def of BLOCKS) {
     for (const row of [...def.cuadrillaRows, ...def.supervisorRows]) {
       updates.push({
-        range: quotedRange(`A${row}:G${row}`),
+        range: quotedRange(ALIMENTACION_TAB, `A${row}:G${row}`),
         values: [["", "", "", "", "", "", ""]],
       });
     }
   }
 
   updates.push({
-    range: quotedRange(`J1:J${GRID_ROWS}`),
+    range: quotedRange(ALIMENTACION_TAB, `J1:J${GRID_ROWS}`),
     values: Array.from({ length: GRID_ROWS }, () => [""]),
+  });
+
+  await write(updates);
+  return { data: await readAlimentacion(), archivedAs };
+}
+
+/* ------------------------------------------------------------------ */
+/* Restaurar una liquidación archivada en la pestaña de trabajo        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Copia los datos de una pestaña archivada a la pestaña de trabajo para
+ * seguir llenándola. Si la pestaña de trabajo tiene datos, primero se archiva
+ * para no perderlos.
+ */
+export async function restoreAlimentacion(sourceTab: string): Promise<{
+  data: AlimentacionData;
+  archivedAs: string;
+}> {
+  const source = sourceTab.trim();
+  if (!source) throw new Error("Selecciona una liquidación archivada.");
+  if (source === ALIMENTACION_TAB) {
+    throw new Error("Esa ya es la pestaña de trabajo.");
+  }
+
+  const archived = await readAlimentacion(source);
+  const current = await readAlimentacion();
+  const currentHasData =
+    MEAL_KEYS.some((key) =>
+      current.meals[key].days.some((day) => day.cuadrilla !== "" || day.supervisor !== "")
+    ) ||
+    current.workers.length > 0 ||
+    current.supervisor !== "";
+
+  if (dataSource() === "demo") {
+    return { data: demoData(), archivedAs: "" };
+  }
+
+  let archivedAs = "";
+  if (currentHasData) {
+    const result = await archiveAlimentacion();
+    archivedAs = result.archivedAs;
+  }
+
+  const updates: Update[] = [];
+
+  for (const def of BLOCKS) {
+    const block = archived.meals[def.key];
+
+    updates.push({
+      range: quotedRange(ALIMENTACION_TAB, `A${def.firstDateRow}`),
+      values: [[block.startDate]],
+    });
+    updates.push({
+      range: quotedRange(ALIMENTACION_TAB, def.costCuadrillaCell),
+      values: [[block.costCuadrilla ?? ""]],
+    });
+    updates.push({
+      range: quotedRange(ALIMENTACION_TAB, def.costSupervisorCell),
+      values: [[block.costSupervisor ?? ""]],
+    });
+
+    for (let week = 0; week < def.dateRows.length; week += 1) {
+      const slice = block.days.slice(week * 7, week * 7 + 7);
+      updates.push({
+        range: quotedRange(
+          ALIMENTACION_TAB,
+          `A${def.cuadrillaRows[week]}:G${def.cuadrillaRows[week]}`
+        ),
+        values: [slice.map((day) => qtyCell(day.cuadrilla))],
+      });
+      updates.push({
+        range: quotedRange(
+          ALIMENTACION_TAB,
+          `A${def.supervisorRows[week]}:G${def.supervisorRows[week]}`
+        ),
+        values: [slice.map((day) => qtyCell(day.supervisor))],
+      });
+    }
+  }
+
+  const lines = ["TRABAJADORES", ...archived.workers, "SUPERVISOR", archived.supervisor];
+  updates.push({
+    range: quotedRange(ALIMENTACION_TAB, `J1:J${GRID_ROWS}`),
+    values: Array.from({ length: GRID_ROWS }, (_, i) => [safeName(lines[i] ?? "")]),
   });
 
   await write(updates);
