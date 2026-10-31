@@ -200,8 +200,19 @@ export function demoDeleteItem(row: number): SheetData {
   const data = demoRead();
   const index = data.items.findIndex((entry) => entry.row === row);
   if (index < 0) throw new Error("Fila no encontrada.");
-  data.items[index] = {
-    row,
+
+  // Se suben las filas siguientes para no dejar un hueco en medio.
+  const usedIndexes = data.items
+    .map((item, i) => (item.proveedor || item.concepto || item.valor ? i : -1))
+    .filter((i) => i >= 0);
+  const lastUsedIndex = usedIndexes.length ? usedIndexes[usedIndexes.length - 1] : index;
+
+  for (let i = index; i < lastUsedIndex; i += 1) {
+    const next = data.items[i + 1];
+    data.items[i] = { ...next, row: data.items[i].row };
+  }
+  data.items[lastUsedIndex] = {
+    row: data.items[lastUsedIndex].row,
     no: "",
     ...EMPTY_ITEM,
     idp: "",
@@ -209,6 +220,7 @@ export function demoDeleteItem(row: number): SheetData {
     base: "",
     iva: "",
   };
+
   renumber(data);
   recompute(data);
   store = data;

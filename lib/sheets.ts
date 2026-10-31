@@ -369,14 +369,32 @@ export async function deleteItem(row: number): Promise<SheetData> {
 
   if (source === "demo") return demoDeleteItem(row);
 
-  const updates: Update[] = [];
-  for (const letter of Object.values(ITEM_COLUMNS)) {
-    updates.push({ range: itemRange(config.tab, letter, row), values: [[""]] });
+  // El webhook de Apps Script no puede mover filas: solo se limpia la fila.
+  if (source === "webhook") {
+    await writeViaWebhook(clearRowUpdates(config.tab, row));
+    await renumberItems(config, source);
+    return readSheet();
   }
-  updates.push({ range: itemRange(config.tab, "A", row), values: [[""]] });
 
-  if (source === "webhook") await writeViaWebhook(updates);
-  else await batchUpdate(config, updates);
+  const current = await readSheet();
+  const usedRows = current.items
+    .filter((item) => !isItemEmpty(item))
+    .map((item) => item.row);
+  const lastUsed = usedRows.length ? Math.max(...usedRows) : row;
+
+  if (row < lastUsed) {
+    // Se suben las filas siguientes para que no quede un hueco en medio.
+    try {
+      await moveRowsUp(config, row, lastUsed);
+    } catch {
+      await batchUpdate(config, clearRowUpdates(config.tab, row));
+      await renumberItems(config, source);
+      return readSheet();
+    }
+  }
+
+  // La última fila usada queda limpia (sus fórmulas W, Y, Z, AA se conservan).
+  await batchUpdate(config, clearRowUpdates(config.tab, lastUsed));
 
   // Renumera las filas restantes para que la columna "No." quede continua.
   await renumberItems(config, source);
@@ -660,6 +678,81 @@ function safeCell(value: CellValue): CellValue {
     return `'${value}`;
   }
   return value;
+}
+
+/**
+ * Todas las columnas del bloque de gastos (A..AD).
+ * W, Y, Z y AA son fórmulas del formato: nunca se limpian ni se sobrescriben.
+ */
+const ALL_ITEM_LETTERS = [
+  "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O",
+  "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "AA", "AB", "AC", "AD",
+];
+const FORMULA_COLUMNS = new Set(["W", "Y", "Z", "AA"]);
+
+/** Celdas a vaciar de una fila, sin tocar las columnas con fórmulas. */
+function clearRowUpdates(tab: string, row: number): Update[] {
+  return ALL_ITEM_LETTERS.filter((letter) => !FORMULA_COLUMNS.has(letter)).map((letter) => ({
+    range: itemRange(tab, letter, row),
+    values: [["" as CellValue]],
+  }));
+}
+
+const tabIdCache = new Map<string, number>();
+
+/** sheetId numérico de la pestaña (lo pide la API de estructura). */
+async function tabSheetId(config: Config): Promise<number> {
+  const key = `${config.sheetId}:${config.tab}`;
+  const cached = tabIdCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const meta = (await googleFetch(config.sheetId, "?fields=sheets.properties")) as {
+    sheets?: { properties?: { sheetId?: number; title?: string } }[];
+  };
+  const found = (meta.sheets ?? []).find((sheet) => sheet.properties?.title === config.tab);
+  const id = found?.properties?.sheetId;
+  if (typeof id !== "number") {
+    throw new Error(`No se encontró la pestaña «${config.tab}» en la hoja.`);
+  }
+  tabIdCache.set(key, id);
+  return id;
+}
+
+/**
+ * Sube una fila las filas siguientes (desde `fromRow` hasta `lastUsed`) para
+ * tapar el hueco de un gasto eliminado. Usa copyPaste para que las fórmulas
+ * se ajusten solas a su nueva fila.
+ */
+async function moveRowsUp(config: Config, fromRow: number, lastUsed: number) {
+  const sheetId = await tabSheetId(config);
+  const firstSource = fromRow + 1;
+
+  await googleFetch(config.sheetId, ":batchUpdate", {
+    method: "POST",
+    body: JSON.stringify({
+      requests: [
+        {
+          copyPaste: {
+            source: {
+              sheetId,
+              startRowIndex: firstSource - 1,
+              endRowIndex: lastUsed,
+              startColumnIndex: 0,
+              endColumnIndex: ALL_ITEM_LETTERS.length,
+            },
+            destination: {
+              sheetId,
+              startRowIndex: firstSource - 2,
+              endRowIndex: lastUsed - 1,
+              startColumnIndex: 0,
+              endColumnIndex: ALL_ITEM_LETTERS.length,
+            },
+            pasteType: "PASTE_NORMAL",
+          },
+        },
+      ],
+    }),
+  });
 }
 
 /**
