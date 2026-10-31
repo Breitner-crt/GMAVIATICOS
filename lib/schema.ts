@@ -18,6 +18,7 @@ export const ITEM_COLUMNS: Record<ItemFieldKey, string> = {
   inguat: "X",
   pais: "AB",
   sitio: "AC",
+  foto: "AD",
 };
 
 export const ITEM_FIRST_ROW = 10;
@@ -68,6 +69,7 @@ const COL_INDEX: Record<string, number> = {
   AA: 26,
   AB: 27,
   AC: 28,
+  AD: 29,
 };
 
 const DAY_MS = 86_400_000;
@@ -130,6 +132,7 @@ export function rowsToItems(rows: unknown[][]): Item[] {
       inguat: cellNumber(get("X")),
       pais: cellText(get("AB")),
       sitio: cellText(get("AC")),
+      foto: cellText(get("AD")),
       idp: cellNumber(get("W")),
       neto: cellNumber(get("Y")),
       base: cellNumber(get("Z")),

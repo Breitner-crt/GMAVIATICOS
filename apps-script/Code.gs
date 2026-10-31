@@ -23,7 +23,7 @@ const TOKEN = "cambia-este-token-por-uno-largo-y-secreto";
 const HEADER_CELLS = ["X2", "B4", "E4", "G4", "I4", "O4", "Q4", "G6", "I6", "N6"];
 const FIRST_ROW = 10;
 const LAST_ROW = 50;
-const COLUMNS = 29; // A..AC
+const COLUMNS = 30; // A..AD
 
 function doPost(e) {
   try {

@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     }
 
     const itemData: Partial<Item> = { ...(body.item ?? {}) };
-    if (photoUrl) itemData.sitio = photoUrl;
+    if (photoUrl) itemData.foto = photoUrl;
 
     const data = await addItem(itemData);
     return Response.json(warning ? { ...data, warning } : data);

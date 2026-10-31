@@ -212,6 +212,7 @@ export function ocrToItem(doc: OcrDocument): Omit<Item, "row" | "no"> {
     inguat: doc.inguat,
     pais: doc.pais,
     sitio: doc.sitio,
+    foto: "",
     idp: "",
     neto: "",
     base: "",

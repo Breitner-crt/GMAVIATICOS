@@ -3,8 +3,6 @@ import { redirect } from "next/navigation";
 import AppShell from "@/components/AppShell";
 import ConfigError from "@/components/ConfigError";
 import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth";
-import { serviceAccountEmail } from "@/lib/google";
-import { ocrEnabled } from "@/lib/ocr";
 import { readSheet } from "@/lib/sheets";
 
 export const dynamic = "force-dynamic";
@@ -18,11 +16,7 @@ export default async function Page() {
   try {
     const data = await readSheet();
     return (
-      <AppShell
-        initial={data}
-        ocrEnabled={ocrEnabled()}
-        serviceAccountEmail={serviceAccountEmail()}
-      />
+      <AppShell initial={data} />
     );
   } catch (error) {
     const message =

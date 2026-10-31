@@ -124,7 +124,7 @@ async function readRaw(config: Config) {
   const headerCells = Object.values(HEADER_CELLS);
   const ranges = [
     ...headerCells.map((cell) => headerRange(tab, cell)),
-    headerRange(tab, `A${ITEM_FIRST_ROW}:AC${ITEM_LAST_ROW}`),
+    headerRange(tab, `A${ITEM_FIRST_ROW}:AD${ITEM_LAST_ROW}`),
     headerRange(tab, `T70:T74`),
   ];
 
@@ -330,7 +330,15 @@ export async function addItem(input: Partial<Item>): Promise<SheetData> {
 
   // La fila nueva pudo quedar en medio de un hueco: se renumera todo.
   await renumberItems(config, source);
-  return readSheet();
+
+  let data = await readSheet();
+  // Reintento por si Google Sheets tarda un instante en reflejar la escritura.
+  const saved = data.items.find((row) => row.row === target.row);
+  if (!saved || isItemEmpty(saved)) {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    data = await readSheet();
+  }
+  return data;
 }
 
 export async function updateItem(row: number, input: Partial<Item>): Promise<SheetData> {

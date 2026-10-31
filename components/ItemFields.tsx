@@ -25,6 +25,7 @@ export const EMPTY_DRAFT: ItemDraft = {
   inguat: "",
   pais: "GUATEMALA",
   sitio: "",
+  foto: "",
 };
 
 export function draftFromItem(item: Partial<Item>): ItemDraft {
@@ -44,6 +45,7 @@ export function draftFromItem(item: Partial<Item>): ItemDraft {
     inguat: item.inguat ?? "",
     pais: item.pais ?? "GUATEMALA",
     sitio: item.sitio ?? "",
+    foto: item.foto ?? "",
   };
 }
 
@@ -102,7 +104,14 @@ const FIELDS: FieldDef[] = [
   },
   { key: "inguat", label: "INGUAT (Q)", type: "number", inputMode: "decimal" },
   { key: "pais", label: "País", type: "text" },
-  { key: "sitio", label: "Sitio / enlace de foto", type: "text" },
+  { key: "sitio", label: "Sitio", type: "text" },
+  {
+    key: "foto",
+    label: "Foto (enlace de Drive)",
+    type: "text",
+    wide: true,
+    placeholder: "https://drive.google.com/file/d/…",
+  },
 ];
 
 type Props = {

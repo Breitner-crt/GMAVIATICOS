@@ -26,7 +26,8 @@ export type ItemFieldKey =
   | "tipoComb"
   | "inguat"
   | "pais"
-  | "sitio";
+  | "sitio"
+  | "foto";
 
 export type Item = {
   row: number;
@@ -46,6 +47,8 @@ export type Item = {
   inguat: string;
   pais: string;
   sitio: string;
+  /** Enlace de la foto en Google Drive (columna AD). */
+  foto: string;
   /** Calculados por el Sheet (solo lectura). */
   idp: string;
   neto: string;
@@ -144,6 +147,7 @@ export const EMPTY_ITEM: Omit<Item, "row" | "no" | "idp" | "neto" | "base" | "iv
   inguat: "",
   pais: "GUATEMALA",
   sitio: "",
+  foto: "",
 };
 
 /** Documento detectado por el OCR (todos los campos son texto). */

@@ -5,17 +5,13 @@ import type { HeaderData, Item, SheetData } from "@/lib/types";
 import { isItemEmpty } from "@/lib/schema";
 import { api, formatDate, money } from "@/lib/client";
 import ItemFields, { EMPTY_DRAFT, draftFromItem, type ItemDraft } from "./ItemFields";
-import PhotoModal from "./PhotoModal";
 import PhotoUpload, { type UploadedPhoto } from "./PhotoUpload";
-import SheetSettings from "./SheetSettings";
 import NewLiquidation from "./NewLiquidation";
 
 type Tab = "form" | "items" | "totals";
 
 type Props = {
   initial: SheetData;
-  ocrEnabled: boolean;
-  serviceAccountEmail: string | null;
 };
 
 type HeaderField = {
@@ -60,7 +56,7 @@ const SOURCE_LABEL: Record<SheetData["meta"]["source"], string> = {
   webhook: "Apps Script",
 };
 
-export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: Props) {
+export default function AppShell({ initial }: Props) {
   const [data, setData] = useState<SheetData>(initial);
   const [tab, setTab] = useState<Tab>("items");
   const [header, setHeader] = useState<HeaderData>(initial.header);
@@ -76,10 +72,8 @@ export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: P
     draft: ItemDraft;
     item?: Item;
   } | null>(null);
-  const [photoOpen, setPhotoOpen] = useState(false);
   const [photoUploadOpen, setPhotoUploadOpen] = useState(false);
   const [uploadedPhotos, setUploadedPhotos] = useState<UploadedPhoto[]>([]);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [newLiqOpen, setNewLiqOpen] = useState(false);
 
   useEffect(() => {
@@ -89,7 +83,6 @@ export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: P
   }, [toast]);
 
   const usedItems = useMemo(() => data.items.filter((item) => !isItemEmpty(item)), [data.items]);
-  const capacityLeft = data.items.length - usedItems.length;
   const totalGastos = usedItems.reduce((sum, item) => sum + Number(item.valor || 0), 0);
   const isDemo = data.meta.source === "demo";
   const headerDirty = JSON.stringify(header) !== JSON.stringify(data.header);
@@ -117,6 +110,20 @@ export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: P
     } finally {
       setBusy(null);
     }
+  }
+
+  /** Relee la hoja en silencio (con un pequeño margen) para que un gasto nuevo aparezca al instante. */
+  function reconcileSoon() {
+    setTimeout(() => {
+      void (async () => {
+        try {
+          const next = await api<SheetData>("/api/sheet");
+          setData(next);
+        } catch {
+          /* si falla, se mantiene lo que devolvió el guardado */
+        }
+      })();
+    }, 800);
   }
 
   async function saveHeader() {
@@ -149,6 +156,7 @@ export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: P
       });
       setEditing(null);
       applyData(next, isNew ? "Gasto agregado." : "Gasto actualizado.");
+      reconcileSoon();
     } catch (error) {
       notify(error instanceof Error ? error.message : "No se pudo guardar.", "error");
     } finally {
@@ -168,6 +176,7 @@ export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: P
       });
       setEditing(null);
       applyData(next, "Gasto eliminado.");
+      reconcileSoon();
     } catch (error) {
       notify(error instanceof Error ? error.message : "No se pudo eliminar.", "error");
     } finally {
@@ -217,18 +226,6 @@ export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: P
             </div>
 
             <div className="flex shrink-0 items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setSettingsOpen(true)}
-                className="rounded-full p-2 text-white/90 transition hover:bg-white/10"
-                aria-label="Hoja de cálculo"
-                title="Elegir hoja de cálculo"
-              >
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <rect x="4" y="4" width="16" height="16" rx="2" />
-                  <path d="M4 10h16M4 15h16M10 4v16" />
-                </svg>
-              </button>
               <button
                 type="button"
                 onClick={refresh}
@@ -345,46 +342,6 @@ export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: P
           <div className="space-y-4">
             <button
               type="button"
-              onClick={() => setPhotoOpen(true)}
-              className={`flex w-full items-center gap-4 rounded-2xl px-4 py-4 text-left shadow-sm transition ${
-                ocrEnabled
-                  ? "bg-brand-600 text-white hover:bg-brand-700"
-                  : "border border-dashed border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              <span
-                className={`grid h-12 w-12 shrink-0 place-items-center rounded-xl ${
-                  ocrEnabled ? "bg-white/15" : "bg-slate-100 text-slate-500"
-                }`}
-              >
-                <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.2l1-1.6h6.6l1 1.6h1.2A2.5 2.5 0 0 1 20 8.5v9A2.5 2.5 0 0 1 17.5 20h-11A2.5 2.5 0 0 1 4 17.5v-9Z" />
-                  <circle cx="12" cy="13" r="3.4" />
-                </svg>
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold">Capturar factura con foto</span>
-                <span
-                  className={`block text-xs ${ocrEnabled ? "text-brand-100" : "text-slate-500"}`}
-                >
-                  {ocrEnabled
-                    ? "La IA lee los datos y tú los revisas antes de guardar"
-                    : "Lectura automática no configurada: agrega los gastos a mano"}
-                </span>
-              </span>
-              <svg
-                viewBox="0 0 24 24"
-                className={`h-5 w-5 shrink-0 ${ocrEnabled ? "text-brand-100" : "text-slate-400"}`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-
-            <button
-              type="button"
               onClick={() => setPhotoUploadOpen(true)}
               className="flex w-full items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-left shadow-sm transition hover:bg-slate-50"
             >
@@ -437,7 +394,7 @@ export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: P
                         <button
                           type="button"
                           onClick={() =>
-                            setEditing({ mode: "new", draft: { ...EMPTY_DRAFT, sitio: photo.url } })
+                            setEditing({ mode: "new", draft: { ...EMPTY_DRAFT, foto: photo.url } })
                           }
                           className="rounded-lg bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200"
                         >
@@ -622,19 +579,6 @@ export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: P
         </div>
       </nav>
 
-      {photoOpen && (
-        <PhotoModal
-          ocrEnabled={ocrEnabled}
-          capacityLeft={capacityLeft}
-          onClose={() => setPhotoOpen(false)}
-          onSaved={(next) => applyData(next, "Gastos agregados al formato.")}
-          onManual={() => {
-            setPhotoOpen(false);
-            setEditing({ mode: "new", draft: { ...EMPTY_DRAFT } });
-          }}
-        />
-      )}
-
       {photoUploadOpen && (
         <PhotoUpload
           onClose={() => setPhotoUploadOpen(false)}
@@ -659,16 +603,6 @@ export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: P
                 : "Formato limpio para una liquidación nueva."
             )
           }
-        />
-      )}
-
-      {settingsOpen && (
-        <SheetSettings
-          sheetId={data.meta.sheetId}
-          tab={data.meta.tab}
-          serviceAccountEmail={serviceAccountEmail}
-          onClose={() => setSettingsOpen(false)}
-          onChanged={(next, message) => applyData(next, message)}
         />
       )}
 
@@ -699,9 +633,9 @@ export default function AppShell({ initial, ocrEnabled, serviceAccountEmail }: P
             </header>
 
             <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-5">
-              {editing.draft.sitio.startsWith("http") && (
+              {(editing.draft.foto || editing.draft.sitio).startsWith("http") && (
                 <a
-                  href={editing.draft.sitio}
+                  href={editing.draft.foto || editing.draft.sitio}
                   target="_blank"
                   rel="noreferrer"
                   className="mb-3 flex items-center justify-between gap-2 rounded-xl bg-sky-50 px-3 py-2.5 text-xs font-semibold text-sky-800"
